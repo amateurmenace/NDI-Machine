@@ -1,13 +1,11 @@
 # NDI Machine emergency coordinator
 
-This module is built for Companion 5.1 with the official module-base 2.1 API and Node 26 runtime.
+Built for Companion 5.1, module-base 2.1 and Node 26. Configure the commissioned router IP, localhost media API and emergency plan. Ports are physical one-based; the adapter converts once to wire numbering.
 
-Enter the commissioned router IP, localhost media API URL and emergency plan JSON. Port numbers in the plan are physical (one-based); the protocol adapter converts to zero-based wire numbering.
+FAIL-OVER TOGGLE reads actual routes on every press. All fiber means take verified network backups; all network means return to commissioned fiber inputs. Mixed or unrelated routes block. Failed commands never advance a stored step. Startup/reconnect sends no route writes, and overlapping presses are blocked during an operation.
 
-Prepare Backups requests media preparation without routing. FAIL-OVER verifies exact fresh hardware sources, fixed 1080p29.97 output, Dante USB receive 1/2 audio, configuration revisions and operation identities; checks all planned crosspoints and locks; then takes and verifies each configured path. The operation is not atomic. Partial or unknown outcomes never trigger a global rollback. No command is replayed after reconnect. Return Normal refuses paths changed by an operator or since a connection loss.
+Network take verifies exact fresh hardware sources, 1080p29.97, Dante USB receive 1/2 and committed revisions through the real media API. Fiber return remains available if that API is offline. Both directions preflight locks and paths, reject intervening changes/reconnects, and verify individual crosspoints. Partial/unknown outcomes never cause global rollback or automatic replay. Standalone Return Normal retains its stricter unchanged-take ledger. Prepare Backups starts media without routing.
 
-The native production control API must be running and implement the documented readiness contract. Diagnostic executables do not satisfy readiness. If that API is unavailable, the button is BLOCKED and sends no route writes.
+Feedback: red blocked/stale/unresolved, amber fiber with network take ready, green network with fiber return available, blue working. Variables show route mode, next toggle action and separate engine health. Green does not prove healthy backup media, physical SDI or ATEM tally. Signal remains UNKNOWN. Keep the existing Blackmagic Videohub module for independent manual recovery.
 
-Feedback: red blocked/stale, amber ready, green ready plus backup crosspoints confirmed, blue working. Green does not mean independently verified SDI or ATEM tally. The signal variable remains UNKNOWN. Keep the existing Blackmagic Videohub module for independent manual recovery, including if this module or the media PC fails.
-
-Do not use the button editor's Test control on a live show unless a deliberate hardware take is intended.
+Do not use the editor's Test button during a live show unless a deliberate hardware take is intended. Old layout imports may overwrite the button; verify its action and feedbacks afterward.

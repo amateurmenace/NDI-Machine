@@ -13,3 +13,7 @@ Status: software integration and short hardware scheduling checks passed. Physic
 Raw evidence and Companion exports are machine-specific and excluded from Git under `reports/private/`. Relevant captures: `four-outputs-20261018-144126`, `worker-switch-20261018-144905.json`, `supervisor-restart.json`, `control-api-validation.json`, and `companion-failover-configured.jpg`.
 
 Still Not Run: independently observed SDI picture/audio and lip-sync, physical take/return, hardware fault injection, alternate codecs, and real-time 24h/72h soaks. Source video, software readiness, and router crosspoint readback do not establish the physical cable or signal at the ATEM.
+
+## Toggle update
+
+User-requested actual-route toggle added in module 0.1.4 and installed on button 1/1/1. 20 tests passed, including repeated network/fiber transitions, startup on network without take ownership, media-offline return, failed take, mixed/locked/stale routes, concurrent presses and connection changes. UI shows NETWORK / RETURN FIBER. No live route writes or physical toggle test performed.

@@ -63,6 +63,21 @@ export function takeReadiness(plan: Plan, snapshot: HubSnapshot): string | undef
   }
   return undefined
 }
+export type RouteMode = 'FIBER' | 'NETWORK' | 'MIXED'
+export function routeMode(plan: Plan, snapshot: HubSnapshot): RouteMode {
+  if (plan.paths.every(path => snapshot.routes.get(path.destination) === path.normalInput)) return 'FIBER'
+  if (plan.paths.every(path => snapshot.routes.get(path.destination) === path.backupInput)) return 'NETWORK'
+  return 'MIXED'
+}
+export function toggleReadiness(plan: Plan, snapshot: HubSnapshot, engineReason?: string): string | undefined {
+  const reason = takeReadiness(plan, snapshot)
+  if (reason) return reason
+  const mode = routeMode(plan, snapshot)
+  if (mode === 'MIXED') return 'Mixed routes: use explicit Take All or independent manual controls; toggle direction is ambiguous'
+  // A deliberate return to the commissioned fiber inputs must remain possible
+  // if the backup media PC is unavailable. Network take still requires media.
+  return mode === 'FIBER' ? engineReason : undefined
+}
 export class HttpMedia implements Media {
   constructor(private base: string) {
     const url = new URL(base)
@@ -87,32 +102,43 @@ export class HttpMedia implements Media {
     return result.operationId
   }
 }
-export type Outcome = {id: string; state: 'confirmed' | 'blocked' | 'partial' | 'unknown'; confirmed: number[]; reason: string}
+export type Outcome = {id: string; state: 'confirmed' | 'blocked' | 'partial' | 'unknown'; confirmed: number[]; reason: string; target?: 'FIBER' | 'NETWORK'}
 export class Coordinator {
   busy = false
   private ledger = new Map<number, {epoch: number; change: number}>()
   constructor(readonly plan: Plan, private hub: Router, private media: Media) {}
-  private preflight(snapshot: HubSnapshot, returning: boolean): void {
+  private preflight(snapshot: HubSnapshot, returning: boolean, observedToggle = false): void {
     if (performance.now() - snapshot.sampledAt > 1500) throw new Error('Videohub snapshot stale')
     for (const path of this.plan.paths) {
       if (path.destination > snapshot.outputs || Math.max(path.normalInput, path.backupInput) > snapshot.inputs) throw new Error('Plan exceeds connected router port count')
       if (snapshot.locks.get(path.destination) !== 'U') throw new Error(`Destination ${path.destination} locked or lock state unknown`)
       const current = snapshot.routes.get(path.destination)
-      if (returning) {
+      if (returning && observedToggle) {
+        if (current !== path.backupInput) throw new Error(`Destination ${path.destination}: backup route no longer selected`)
+      } else if (returning) {
         const ledger = this.ledger.get(path.destination)
         if (!ledger || ledger.epoch !== snapshot.epoch || ledger.change !== snapshot.changes.get(path.destination) || current !== path.backupInput)
           throw new Error(`Destination ${path.destination}: no unchanged confirmed take; use independent manual controls`)
       } else if (current !== path.normalInput && current !== path.backupInput) throw new Error(`Destination ${path.destination}: intervening manual route ${current}`)
     }
   }
-  async take(returning = false): Promise<Outcome> {
+  take(returning = false): Promise<Outcome> { return this.run(returning ? 'return' : 'take') }
+  toggle(): Promise<Outcome> { return this.run('toggle') }
+  private async run(command: 'take' | 'return' | 'toggle'): Promise<Outcome> {
     const result: Outcome = {id: randomUUID(), state: 'blocked', confirmed: [], reason: ''}
     if (this.busy) return {...result, reason: 'An emergency operation is already running'}
     this.busy = true
     let sent = false
     try {
       const initial = await this.hub.snapshot()
-      this.preflight(initial, returning)
+      const mode = routeMode(this.plan, initial)
+      if (command === 'toggle' && mode === 'MIXED') throw new Error('Mixed routes: toggle blocked; use explicit Take All or independent manual controls')
+      const returning = command === 'return' || (command === 'toggle' && mode === 'NETWORK')
+      result.target = returning ? 'FIBER' : 'NETWORK'
+      // The toggle is an explicit request to invert the currently read-back
+      // complete group, including after module restart. It never relies on a
+      // remembered press count or adopts unrelated/partially changed routes.
+      this.preflight(initial, returning, command === 'toggle')
       let expectedRevision = ''
       if (!returning) {
         const state = await this.media.state()
@@ -148,7 +174,7 @@ export class Coordinator {
       if (last.epoch !== initial.epoch) throw new Error('Connection changed after take; outcome unknown')
       result.confirmed = this.plan.paths.filter(path => last.routes.get(path.destination) === (returning ? path.normalInput : path.backupInput)).map(path => path.slot)
       result.state = result.confirmed.length === this.plan.paths.length ? 'confirmed' : 'partial'
-      result.reason = result.state === 'confirmed' ? 'Crosspoints confirmed; downstream SDI signal Unknown' : 'Some crosspoints changed during verification; no rollback attempted'
+      result.reason = result.state === 'confirmed' ? `${result.target} crosspoints confirmed; downstream SDI signal Unknown` : 'Some crosspoints changed during verification; no rollback attempted'
     } catch (error) {
       result.state = sent ? 'unknown' : result.confirmed.length ? 'partial' : 'blocked'
       result.reason = error instanceof Error ? error.message : String(error)

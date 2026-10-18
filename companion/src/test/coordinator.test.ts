@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
-import { Coordinator, readiness, takeReadiness, validatePlan, type Media, type MediaState, type Plan } from '../coordinator.js'
+import { Coordinator, readiness, routeMode, takeReadiness, toggleReadiness, validatePlan, type Media, type MediaState, type Plan } from '../coordinator.js'
 import type { HubSnapshot, Router } from '../videohub.js'
 const plan: Plan = {schemaVersion: 1, name: 'test plan', audioEndpointId: 'usb-test', paths: [
   {slot: 1, destination: 33, normalInput: 9, backupInput: 8, device: '0xa1', source: 'Cam 1'},
@@ -109,4 +109,74 @@ test('connection loss after write is unknown, never a fabricated success', async
   const hub = new FakeHub(); hub.route = async () => {throw new Error('connection lost')}
   const result = await new Coordinator(plan, hub, media()).take()
   assert.equal(result.state, 'unknown'); assert.deepEqual(result.confirmed, [])
+})
+
+test('toggle takes network, returns fiber, then takes network using actual route readback', async () => {
+  const hub = new FakeHub(); const coordinator = new Coordinator(plan, hub, media())
+  assert.equal(routeMode(plan, await hub.snapshot()), 'FIBER')
+  for (const target of ['NETWORK', 'FIBER', 'NETWORK']) {
+    const result = await coordinator.toggle()
+    assert.equal(result.state, 'confirmed'); assert.equal(result.target, target)
+    assert.equal(routeMode(plan, await hub.snapshot()), target)
+  }
+  assert.deepEqual(hub.writes, [[33, 8], [34, 6], [33, 9], [34, 10], [33, 8], [34, 6]])
+})
+
+test('toggle starts from already-selected network and returns fiber without media API or prior take ownership', async () => {
+  const hub = new FakeHub(); hub.manual(33, 8); hub.manual(34, 6)
+  let mediaCalls = 0
+  const offline: Media = {state: async () => {++mediaCalls; throw new Error('offline')}, prepare: async () => ''}
+  assert.equal(toggleReadiness(plan, await hub.snapshot(), 'offline'), undefined)
+  const result = await new Coordinator(plan, hub, offline).toggle()
+  assert.equal(result.state, 'confirmed'); assert.equal(result.target, 'FIBER'); assert.equal(mediaCalls, 0)
+  assert.deepEqual(hub.writes, [[33, 9], [34, 10]])
+  assert.equal(toggleReadiness(plan, await hub.snapshot(), 'offline'), 'offline')
+  assert.equal((await new Coordinator(plan, hub, offline).toggle()).state, 'blocked')
+  assert.equal(hub.writes.length, 2)
+})
+
+test('mixed, unrelated, locked and stale routes block toggle without advancing anything', async () => {
+  const hub = new FakeHub(); const coordinator = new Coordinator(plan, hub, media())
+  hub.manual(33, 8)
+  assert.match(toggleReadiness(plan, await hub.snapshot())!, /Mixed/)
+  assert.equal((await coordinator.toggle()).state, 'blocked')
+  hub.manual(33, 20); assert.equal((await coordinator.toggle()).state, 'blocked')
+  hub.manual(33, 9); hub.locks.set(34, 'L'); assert.equal((await coordinator.toggle()).state, 'blocked')
+  hub.locks.set(34, 'U'); const fresh = hub.snapshot.bind(hub)
+  hub.snapshot = async () => ({...await fresh(), sampledAt: performance.now() - 2000})
+  assert.equal((await coordinator.toggle()).state, 'blocked'); assert.deepEqual(hub.writes, [])
+})
+
+test('failed network readiness keeps fiber and next valid press still takes network', async () => {
+  const hub = new FakeHub(); const state = readyState(); state.outputs[0].fallback = true
+  const coordinator = new Coordinator(plan, hub, media(() => state))
+  assert.equal((await coordinator.toggle()).state, 'blocked'); assert.deepEqual(hub.writes, [])
+  state.outputs[0].fallback = false
+  assert.equal((await coordinator.toggle()).target, 'NETWORK')
+  assert.deepEqual(hub.writes, [[33, 8], [34, 6]])
+})
+
+test('manual change during toggle return produces partial outcome and no automatic rollback or next-step flip', async () => {
+  const hub = new FakeHub(); hub.manual(33, 8); hub.manual(34, 6)
+  hub.afterWrite = () => hub.manual(34, 20)
+  const coordinator = new Coordinator(plan, hub, media())
+  const result = await coordinator.toggle()
+  assert.equal(result.state, 'partial'); assert.equal(result.target, 'FIBER')
+  assert.deepEqual(hub.writes, [[33, 9]])
+  assert.equal((await coordinator.toggle()).state, 'blocked'); assert.equal(hub.writes.length, 1)
+})
+
+test('overlapping toggle presses cannot execute an opposite operation in flight', async () => {
+  const hub = new FakeHub(); const coordinator = new Coordinator(plan, hub, media())
+  const first = coordinator.toggle(); const second = await coordinator.toggle()
+  assert.equal(second.state, 'blocked'); assert.match(second.reason, /already running/)
+  assert.equal((await first).target, 'NETWORK'); assert.deepEqual(hub.writes, [[33, 8], [34, 6]])
+})
+
+test('toggle return blocks a reconnect between decision and write', async () => {
+  const hub = new FakeHub(); hub.manual(33, 8); hub.manual(34, 6)
+  const snapshot = hub.snapshot.bind(hub); let calls = 0
+  hub.snapshot = async () => { if (++calls === 2) ++hub.epoch; return snapshot() }
+  const result = await new Coordinator(plan, hub, media()).toggle()
+  assert.equal(result.state, 'blocked'); assert.deepEqual(hub.writes, [])
 })

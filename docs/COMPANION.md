@@ -1,21 +1,31 @@
-# Emergency button commissioning
+# Fail-over toggle commissioning
 
-The live Companion 5.1.0 instance has module `ndi-machine` 0.1.2, labelled `ndi_machine`. Button **1/1/1** is the existing **FAIL-OVER (Fiber to Network)** button. Its single press action calls the emergency coordinator; no fixed-delay route macro is used. Four feedbacks reflect readiness, confirmed backup routes, blocked/stale state and work in progress. A separate text element displays `$(ndi_machine:status)`.
+Companion 5.1.0 uses custom module `ndi-machine` 0.1.4, labelled `ndi_machine`. At the user's request, existing button **1/1/1** is a **FAIL-OVER toggle (Fiber / Network)**. It has one `toggle` press action, no release action, and no blind two-step cycling. Text shows `$(ndi_machine:status)` and `$(ndi_machine:next_action)`.
 
-The control API at `http://127.0.0.1:9860` now polls real persistent worker state. Four exact sources and fixed USB stereo audio report healthy. The button displays **BACKUP** because all protected destinations already selected the backup inputs before this work. It automatically shows BLOCKED if media or router readiness cannot be established. The button was configured but never pressed or tested on live routing. SDK diagnostics do not satisfy readiness.
+Each press obtains fresh Videohub route readback:
 
-The commissioned take maps physical inputs 8/6/7/5 to Videohub outputs 33/34/35/36. These feed ATEM inputs 1/2/3/4. Return Normal is a separate module action using sources 9/10/11/12. All media uses the exact commissioned DeckLink IDs and AUD CAM names, 1080p29.97, fixed Dante USB I/O receive channels 1/2. Device and endpoint IDs are in ignored local configuration, not public presets.
+| Actual protected routes | Next press |
+|---|---|
+| All fiber inputs 9/10/11/12 | Verify exact backup video/audio and committed revisions, then take network inputs 8/6/7/5. |
+| All network inputs 8/6/7/5 | Return to fiber 9/10/11/12, even when the media API is offline. |
+| Mixed, unrelated, unavailable or locked | Block the toggle and explain the conflict. |
 
-The coordinator checks fresh media identity, format, audio, committed operation/revision, all current routes and locks. It verifies each crosspoint from reported state; ACK is insufficient. Group operations may partially complete. It never rolls back the whole matrix, replays a take after reconnect, or returns automatically. Return Normal refuses paths with intervening changes or a changed router connection epoch. Keep the existing Blackmagic Videohub connection for independent manual recovery.
+Destinations are physical Videohub outputs 33/34/35/36, feeding ATEM 1/2/3/4. Network media uses the exact commissioned DeckLink IDs, AUD CAM 1-4, 1080p29.97 and fixed Dante USB receive 1/2. Machine-specific identities remain in ignored local configuration.
 
-Colors: red blocked/stale or unresolved partial/unknown outcome, amber ready to take, green ready with all backup crosspoints confirmed, blue working. Readiness includes current locks and allowed routes as well as media. Partial/unknown results retain their explanation until another deliberate operation. Crosspoint confirmation does not prove physical SDI or ATEM tally; the signal variable remains UNKNOWN.
+Direction comes from the router, including after module restart. No routing occurs on startup/reconnect. Both directions preflight all routes/locks, reject intervening changes or connection-epoch changes, and verify each crosspoint; ACK is insufficient. Overlapping presses are blocked during an operation. Partial/unknown results never trigger global rollback or advance a stored toggle step.
 
-An export without connection secrets is saved in `reports/private/NDI-Machine-failover-final-20261018.companionconfig`, with a screenshot of the configured action. Re-importing an old generated Companion layout may overwrite this button. The export contains other local configuration and is excluded from Git.
+Standalone Take All remains available for deliberate recovery from a mix of commissioned normal/backup paths. Standalone Return Normal retains its stricter unchanged-take ownership ledger. The new toggle explicitly authorizes inversion of the freshly observed complete group. Keep the existing Blackmagic Videohub connection for independent manual recovery.
+
+Colors: red blocked/stale/unresolved, amber FIBER with network take ready, green NETWORK with fiber return available, blue working. NETWORK/green confirms router crosspoints and does not require backup engines to remain healthy, because fiber return must still work if the media PC fails. `engine_ready` reports media health separately. Physical signal and ATEM tally remain UNKNOWN.
+
+At configuration time all destinations already selected network inputs, so the button shows **NETWORK / RETURN FIBER**. It was configured without a live press or route write. Physical take/return remains Not Run. Secret-excluded export: `reports/private/NDI-Machine-toggle-20261018.companionconfig`; screenshot: `companion-failover-toggle.jpg`. These private artifacts are excluded from Git.
+
+The button was found reset to the original unprogrammed template again at the start of this change. The responsible import source is not established. Old generated layout imports can overwrite it; preserve this button and verify action/feedback bindings after upgrades or imports.
 
 ## Build and verification
 
-Use `scripts/Build-Companion.ps1`. Dependencies are pinned in package-lock.json. Runtime uses Companion's bundled Node 26.11.1; packaging tools run under bundled Node 22 to satisfy their engine range. The package tool includes third-party license inventory. Only the custom module is MIT licensed; SDK redistribution remains a separate review.
+Use `scripts/Build-Companion.ps1`; dependencies are pinned. Runtime is Companion's Node 26.11.1 and packaging uses its Node 22. The official packager inventories dependency licenses. Only the custom module is MIT; SDK redistribution has separate terms.
 
-13 tests cover fragmented TCP blocks, wire numbering, ACK without readback, disconnected media, locks, exact source/audio readiness, revisions, partial take, operator changes, return ownership, readiness feedback conditions and connection loss. The real adapter read current protected routes and unlocked states without sending route writes. Real worker/API readiness and control-host restart passed; physical take/return, remote authenticated control and complete media action/preset coverage remain Not Run or unfinished.
+20 tests passed: protocol fragmentation/readback, exact media readiness, revisions, partial results, operator changes, return ownership, actual-route toggling, startup on network, media-offline fiber return, failed-take preservation, mixed/locked/stale routes, concurrent presses and reconnect during return. TypeScript compilation and packaging passed. Physical take/return, remote authenticated control and full media action/layout coverage remain Not Run or unfinished.
 
-Protocol source: [Blackmagic Videohub Ethernet Protocol](https://documents.blackmagicdesign.com/DeveloperManuals/VideohubEthernetProtocol.pdf). API-generation reference: [official Companion TypeScript template](https://github.com/bitfocus/companion-module-template-ts).
+References: [Videohub protocol](https://documents.blackmagicdesign.com/DeveloperManuals/VideohubEthernetProtocol.pdf), [official Companion template](https://github.com/bitfocus/companion-module-template-ts).
