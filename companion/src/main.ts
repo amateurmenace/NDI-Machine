@@ -2,21 +2,24 @@ import { InstanceBase, InstanceStatus, type SomeCompanionConfigField } from '@co
 import { Coordinator, HttpMedia, readiness, routeMode, toggleReadiness, validatePlan, type Plan, type RouteMode } from './coordinator.js'
 import { Videohub } from './videohub.js'
 import { performance } from 'node:perf_hooks'
+import { AtemAudio, CompanionZoom, EmergencyAudio } from './audio.js'
 
-type Config = {host: string; apiUrl: string; plan: string}
+type Config = {host: string; apiUrl: string; plan: string; atemHost: string; companionUrl: string; zoomNetwork: string; zoomFiber: string}
 type Empty = Record<string, never>
 type Schema = {
   config: Config; secrets: undefined;
   actions: {toggle: {options: Empty}; take_all: {options: Empty}; return_normal: {options: Empty}; prepare: {options: Empty}; check: {options: Empty}};
   feedbacks: {blocked: {type: 'boolean'; options: Empty}; ready: {type: 'boolean'; options: Empty};
     active: {type: 'boolean'; options: Empty}; working: {type: 'boolean'; options: Empty}};
-  variables: {status: string; reason: string; engine_ready: string; routes: string; signal: string; operation: string; route_mode: string; next_action: string}
+  variables: {status: string; reason: string; engine_ready: string; routes: string; signal: string; operation: string; route_mode: string; next_action: string; audio_profile: string}
 }
 export const UpgradeScripts = []
 export default class ModuleInstance extends InstanceBase<Schema> {
   private hub?: Videohub
   private media?: HttpMedia
   private coordinator?: Coordinator
+  private atemAudio?: AtemAudio
+  private audio?: EmergencyAudio
   private plan?: Plan
   private timer?: NodeJS.Timeout
   private pollTask?: Promise<void>
@@ -36,6 +39,7 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       engine_ready: {name: 'Fresh backup engine readiness'}, routes: {name: 'Videohub crosspoint readback'},
       signal: {name: 'Independently verified downstream SDI signal'}, operation: {name: 'Last operation ID'},
       route_mode: {name: 'Actual route group: FIBER, NETWORK, MIXED or UNKNOWN'}, next_action: {name: 'Next guarded toggle action'},
+      audio_profile: {name: 'Observed ATEM input audio profile (Zoom dispatch is separate)'},
     })
     this.setActionDefinitions({
       toggle: {name: 'FAIL-OVER TOGGLE: Fiber / Network (verified routes)', options: [], callback: async () => this.execute('toggle')},
@@ -70,8 +74,12 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       {type: 'textinput', id: 'host', label: 'Commissioned Videohub IP address', width: 6, default: ''},
       {type: 'textinput', id: 'apiUrl', label: 'Media control API (localhost)', width: 6, default: 'http://127.0.0.1:9860'},
       {type: 'textinput', id: 'plan', label: 'Commissioned emergency plan JSON (one-based physical ports)', width: 12, multiline: true, default: ''},
+      {type: 'textinput', id: 'atemHost', label: 'Commissioned ATEM HD8 ISO IP (required for audio)', width: 6, default: ''},
+      {type: 'textinput', id: 'companionUrl', label: 'Companion button API (localhost)', width: 6, default: 'http://127.0.0.1:8000'},
+      {type: 'textinput', id: 'zoomNetwork', label: 'ZOOM DANTE button (page/row/column)', width: 6, default: '1/1/3'},
+      {type: 'textinput', id: 'zoomFiber', label: 'ZOOM MADI button (page/row/column)', width: 6, default: '1/1/2'},
       {type: 'static-text', id: 'info', label: 'Operation', width: 12,
-        value: 'Toggle reads actual routes: all fiber means take verified network backups; all network means return to commissioned fiber inputs, even if the media API is offline. Mixed routes block the toggle. Checks locks and intervening changes, verifies each crosspoint, never routes automatically. SDI signal remains Unknown.'},
+        value: 'After confirmed video routes: Network presses ZOOM DANTE and enables only ATEM Input 1. Fiber presses ZOOM MADI and enables only XLR + MADI 1/2 + 3/4. All other input audio is Off. ATEM, x32 and zoomswitch must be reachable. Master/gains remain unchanged. Never routes or switches audio automatically. SDI signal remains Unknown.'},
     ]
   }
   async configUpdated(config: Config): Promise<void> {
@@ -82,8 +90,11 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       if (!config.host?.trim()) throw new Error('Videohub address is required')
       this.plan = validatePlan(JSON.parse(config.plan))
       this.media = new HttpMedia(config.apiUrl)
+      const zoom = new CompanionZoom(config.companionUrl || 'http://127.0.0.1:8000', config.zoomNetwork || '1/1/3', config.zoomFiber || '1/1/2')
+      this.atemAudio = new AtemAudio(config.atemHost, message => this.log('warn', message))
+      this.audio = new EmergencyAudio(this.atemAudio, zoom)
       this.hub = new Videohub(config.host.trim())
-      this.coordinator = new Coordinator(this.plan, this.hub, this.media)
+      this.coordinator = new Coordinator(this.plan, this.hub, this.media, this.audio)
       this.reason = 'Awaiting fresh media and router state'
       this.timer = setInterval(() => { void this.refresh() }, 1000)
       await this.refresh()
@@ -93,6 +104,8 @@ export default class ModuleInstance extends InstanceBase<Schema> {
     if (this.timer) clearInterval(this.timer)
     this.timer = undefined; this.hub?.close()
     await this.pollTask
+    await this.atemAudio?.close()
+    this.atemAudio = undefined; this.audio = undefined
     this.hub = undefined; this.media = undefined; this.plan = undefined; this.coordinator = undefined
   }
   private fresh(): boolean { return this.observedAt > 0 && performance.now() - this.observedAt < 2500 }
@@ -103,7 +116,7 @@ export default class ModuleInstance extends InstanceBase<Schema> {
     const next = this.performing ? 'PLEASE WAIT' : !fresh || !this.ready ? 'BLOCKED' : this.routeMode === 'NETWORK' ? 'RETURN FIBER' : 'TAKE NETWORK'
     this.setVariableValues({status, reason: (this.unresolved() ? `${this.outcomeReason}; current: ${this.reason}` : this.reason).slice(0, 500), engine_ready: fresh && this.engineReady ? 'READY' : 'NOT READY',
       routes: fresh && ['FIBER', 'NETWORK'].includes(this.routeMode) ? `${this.routeMode} ROUTES CONFIRMED` : 'NOT CONFIRMED',
-      signal: 'UNKNOWN', operation: this.operation, route_mode: fresh ? this.routeMode : 'UNKNOWN', next_action: next})
+      signal: 'UNKNOWN', operation: this.operation, route_mode: fresh ? this.routeMode : 'UNKNOWN', next_action: next, audio_profile: this.audio?.profile() ?? 'UNKNOWN'})
     this.checkFeedbacks('blocked', 'ready', 'active', 'working')
   }
   private refresh(): Promise<void> {
@@ -114,7 +127,11 @@ export default class ModuleInstance extends InstanceBase<Schema> {
         this.engineReady = media.status === 'fulfilled' && !readiness(this.plan!, media.value)
         const engineReason = media.status === 'rejected' ? 'Media control API unavailable; cannot take network backups' : readiness(this.plan!, media.value)
         this.routeMode = hub.status === 'fulfilled' ? routeMode(this.plan!, hub.value) : 'UNKNOWN'
-        const block = hub.status === 'fulfilled' ? toggleReadiness(this.plan!, hub.value, engineReason) : `Videohub unavailable: ${String(hub.reason)}`
+        let block = hub.status === 'fulfilled' ? toggleReadiness(this.plan!, hub.value, engineReason) : `Videohub unavailable: ${String(hub.reason)}`
+        if (!block) {
+          try { if (!this.audio) throw new Error('Fail-over audio is not configured'); await this.audio.check(this.routeMode === 'NETWORK' ? 'FIBER' : 'NETWORK') }
+          catch (error) { block = String(error) }
+        }
         this.ready = !block
         this.routesConfirmed = this.routeMode === 'NETWORK'
         this.reason = block ?? (this.routesConfirmed ? `Network routes confirmed; next press returns to fiber${engineReason ? '; backup engines not ready' : ''}; physical signal Unknown` : 'Fiber routes confirmed; next press takes network; physical signal Unknown')

@@ -17,3 +17,9 @@ Still Not Run: independently observed SDI picture/audio and lip-sync, physical t
 ## Toggle update
 
 User-requested actual-route toggle added in module 0.1.4 and installed on button 1/1/1. 20 tests passed, including repeated network/fiber transitions, startup on network without take ownership, media-offline return, failed take, mixed/locked/stale routes, concurrent presses and connection changes. UI shows NETWORK / RETURN FIBER. No live route writes or physical toggle test performed.
+
+## Zoom and ATEM audio update
+
+Module 0.2.1 is installed on the existing connection and button 1/1/1. 31 tests passed. Read-only hardware inventory confirmed ATEM Television Studio HD8 ISO with 29 audio input strips. Both direction preflights passed against the live ATEM and Companion Zoom/X32 connection status, without applying either profile. Packaged runtime import, ATEM connection, source enumeration and clean close passed under Node 26 filesystem/network permissions; no native-addon permission was required. The live module reports OK, video FIBER, audio MIXED; no audio or video writes were made during setup. This validates configuration and readiness, not a live audio transition or physical sound.
+
+Tests verify Network enables only Input 1; Fiber enables only XLR + MADI 1/2 + 3/4; other sources including media players and split mono are Off. They also verify exact Zoom button dispatch, no retries, topology/status preflight before video, no audio after failed video, partial outcomes after audio failure, concurrent press rejection and final video recheck. Raw inventory, screenshot and secret-excluded export are in ignored reports/private. The new live audio sequence and independent listening remain Not Run.

@@ -30,6 +30,41 @@ class FakeHub implements Router {
   }
   manual(destination: number, source: number): void { this.routes.set(destination, source); this.changes.set(destination, this.changes.get(destination)! + 1) }
 }
+test('audio preparation blocks video writes; audio executes only after complete video confirmation', async () => {
+  const hub = new FakeHub(); const calls: string[] = []
+  const audio = {prepare: async (target: string) => {calls.push(`prepare:${target}`); return async () => {
+    assert.equal(routeMode(plan, await hub.snapshot()), target)
+    calls.push(`apply:${target}`); return 'audio confirmed'
+  }}}
+  const coordinator = new Coordinator(plan, hub, media(), audio)
+  assert.equal((await coordinator.toggle()).state, 'confirmed')
+  assert.equal((await coordinator.toggle()).state, 'confirmed')
+  assert.deepEqual(calls, ['prepare:NETWORK','apply:NETWORK','prepare:FIBER','apply:FIBER'])
+  const blocked = new FakeHub()
+  assert.equal((await new Coordinator(plan, blocked, media(), {prepare: async () => {throw new Error('ATEM offline')}}).toggle()).state, 'blocked')
+  assert.equal(blocked.writes.length, 0)
+})
+test('partial video never runs audio; audio failure reports partial without reversing video', async () => {
+  let applied = 0
+  const audio = {prepare: async () => async () => {applied++; throw new Error('audio failed')}}
+  const partial = new FakeHub(); partial.afterWrite = () => partial.locks.set(34, 'L')
+  assert.equal((await new Coordinator(plan, partial, media(), audio).toggle()).state, 'partial')
+  assert.equal(applied, 0)
+  const hub = new FakeHub(); const result = await new Coordinator(plan, hub, media(), audio).toggle()
+  assert.equal(result.state, 'partial'); assert.match(result.reason, /audio failed/)
+  assert.equal(applied, 1); assert.deepEqual(hub.writes, [[33,8],[34,6]])
+})
+test('busy lock covers audio execution and final route verification catches intervening video changes', async () => {
+  const hub = new FakeHub(); let concurrent: string | undefined
+  const coordinator = new Coordinator(plan, hub, media(), {prepare: async () => async () => {
+    concurrent = (await coordinator.toggle()).state
+    hub.manual(33, 9)
+    return 'audio applied'
+  }})
+  const result = await coordinator.toggle()
+  assert.equal(concurrent, 'blocked'); assert.equal(result.state, 'partial'); assert.match(result.reason, /routes changed/)
+  assert.deepEqual(result.confirmed, [2])
+})
 function media(get: () => MediaState = readyState): Media { return {state: async () => get(), prepare: async () => 'pending-op'} }
 test('button readiness rejects locked, manually rerouted, stale and wrong-size routers', async () => {
   const hub = new FakeHub()

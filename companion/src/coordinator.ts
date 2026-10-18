@@ -103,10 +103,11 @@ export class HttpMedia implements Media {
   }
 }
 export type Outcome = {id: string; state: 'confirmed' | 'blocked' | 'partial' | 'unknown'; confirmed: number[]; reason: string; target?: 'FIBER' | 'NETWORK'}
+export interface TransitionAudio { prepare(target: 'FIBER' | 'NETWORK'): Promise<() => Promise<string>> }
 export class Coordinator {
   busy = false
   private ledger = new Map<number, {epoch: number; change: number}>()
-  constructor(readonly plan: Plan, private hub: Router, private media: Media) {}
+  constructor(readonly plan: Plan, private hub: Router, private media: Media, private audio?: TransitionAudio) {}
   private preflight(snapshot: HubSnapshot, returning: boolean, observedToggle = false): void {
     if (performance.now() - snapshot.sampledAt > 1500) throw new Error('Videohub snapshot stale')
     for (const path of this.plan.paths) {
@@ -129,6 +130,7 @@ export class Coordinator {
     if (this.busy) return {...result, reason: 'An emergency operation is already running'}
     this.busy = true
     let sent = false
+    let completedRouting = false
     try {
       const initial = await this.hub.snapshot()
       const mode = routeMode(this.plan, initial)
@@ -146,6 +148,7 @@ export class Coordinator {
         if (reason) throw new Error(reason)
         expectedRevision = revisions(this.plan, state)
       }
+      const completeAudio = await this.audio?.prepare(result.target)
       for (const path of this.plan.paths) {
         if (!returning) {
           const state = await this.media.state()
@@ -175,8 +178,18 @@ export class Coordinator {
       result.confirmed = this.plan.paths.filter(path => last.routes.get(path.destination) === (returning ? path.normalInput : path.backupInput)).map(path => path.slot)
       result.state = result.confirmed.length === this.plan.paths.length ? 'confirmed' : 'partial'
       result.reason = result.state === 'confirmed' ? `${result.target} crosspoints confirmed; downstream SDI signal Unknown` : 'Some crosspoints changed during verification; no rollback attempted'
+      if (result.state === 'confirmed' && completeAudio) {
+        completedRouting = true
+        const audioResult = await completeAudio()
+        const final = await this.hub.snapshot()
+        sent = final.epoch !== initial.epoch
+        result.confirmed = sent ? [] : this.plan.paths.filter(path => final.routes.get(path.destination) === (returning ? path.normalInput : path.backupInput)).map(path => path.slot)
+        if (sent || result.confirmed.length !== this.plan.paths.length)
+          throw new Error('Video routes changed during audio switching; audio was applied but combined outcome is partial')
+        result.reason += `; ${audioResult}`
+      }
     } catch (error) {
-      result.state = sent ? 'unknown' : result.confirmed.length ? 'partial' : 'blocked'
+      result.state = sent ? 'unknown' : completedRouting || result.confirmed.length ? 'partial' : 'blocked'
       result.reason = error instanceof Error ? error.message : String(error)
     } finally { this.busy = false }
     return result
