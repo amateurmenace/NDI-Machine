@@ -20,7 +20,7 @@ Colors: red blocked/stale/unresolved, amber FIBER with network take ready, green
 
 At configuration time all destinations already selected network inputs, so the button shows **NETWORK / RETURN FIBER**. It was configured without a live press or route write. Physical take/return remains Not Run. Secret-excluded export: `reports/private/NDI-Machine-toggle-20261018.companionconfig`; screenshot: `companion-failover-toggle.jpg`. These private artifacts are excluded from Git.
 
-The button was found reset to the original unprogrammed template again at the start of this change. The responsible import source is not established. Old generated layout imports can overwrite it; preserve this button and verify action/feedback bindings after upgrades or imports.
+The button was found reset to the original unprogrammed template again at the start of this change. The operator reports no imports currently running. Companion's local log records earlier full imports with buttons set to `reset-and-import` at 14:59:20 and 15:05:08 America/New_York on 2026-10-18, consistent with those resets. The initiating client is not identified, and no later full import appeared through 15:35. Read-only SQLite inspection confirmed the commissioned toggle, four feedbacks and notes are saved; database `quick_check` passed. Preserve this button and verify action/feedback bindings after upgrades or imports. The separate XL-page template at 21/1/1 remains unprogrammed; this commissioning applies to Director button 1/1/1.
 
 ## Build and verification
 
