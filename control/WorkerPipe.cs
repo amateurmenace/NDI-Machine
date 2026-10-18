@@ -6,7 +6,13 @@ using System.Text.Json.Nodes;
 
 namespace NDIMachine.Control;
 
-public sealed class WorkerPipe
+public interface IWorkerPipe
+{
+    Task<JsonObject> Call(string name, JsonObject request, int timeoutMs = 700, CancellationToken cancellation = default);
+    Task<JsonObject> State(int slot, CancellationToken cancellation = default);
+}
+
+public sealed class WorkerPipe : IWorkerPipe
 {
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new();
     public async Task<JsonObject> Call(string name, JsonObject request, int timeoutMs = 700,

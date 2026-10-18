@@ -26,6 +26,7 @@ class Buttons implements ZoomButtons {
   online = true
   async check(): Promise<void> { if (!this.online) throw new Error('Zoom offline') }
   async press(target: AudioTarget): Promise<void> { this.presses.push(target) }
+  async selected(): Promise<AudioTarget> { return this.presses.at(-1) ?? 'FIBER' }
 }
 test('network enables only Input 1; fiber only XLR and MADI 1/2 + 3/4 across all 29 inputs', () => {
   const state = snapshot()
@@ -33,6 +34,17 @@ test('network enables only Input 1; fiber only XLR and MADI 1/2 + 3/4 across all
   assert.deepEqual(audioPlan(state, 'NETWORK').filter(s => s.mix === ON).map(s => s.input), [1])
   assert.deepEqual(audioPlan(state, 'FIBER').filter(s => s.mix === ON).map(s => s.input), [1001, 1501, 1502])
   assert.ok(audioPlan(state, 'FIBER').filter(s => ![1001, 1501, 1502].includes(s.input)).every(s => s.mix === OFF))
+})
+
+test('audio undo restores exact prior mixed On/Off/AFV options and previous Zoom selection', async () => {
+  const mixer = new Mixer(); const buttons = new Buttons(); const audio = new EmergencyAudio(mixer, buttons)
+  mixer.state.sources[3].mix = 4; mixer.state.sources[5].mix = OFF
+  const original = mixer.snapshot(); const undo = await audio.captureUndo()
+  await (await audio.prepare('NETWORK'))()
+  const restore = await undo(); await restore()
+  assert.deepEqual(mixer.state.sources, original.sources)
+  assert.deepEqual(buttons.presses, ['NETWORK','FIBER'])
+  await assert.rejects(restore(), /replayed/)
 })
 test('wrong model, disconnected, missing, mismatched port and unsupported audio block before dispatch', async () => {
   for (const mutate of [
@@ -103,6 +115,6 @@ test('HTTP bridge uses the exact existing button locations, validates connection
     fail = true; await assert.rejects(bridge.press('NETWORK'), /not retried/)
     assert.deepEqual(requests, ['GET /api/connections','POST /api/location/1/1/3/press','POST /api/location/1/1/2/press','POST /api/location/1/1/3/press'])
     assert.throws(() => new CompanionZoom('http://example.com', '1/1/3', '1/1/2'), /localhost/)
-    assert.throws(() => new CompanionZoom('http://localhost', '1/1/1', '1/1/2'), /fail-over/)
+    assert.throws(() => new CompanionZoom('http://localhost', '1/1/0', '1/1/2'), /fail-over/)
   } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))}
 })

@@ -1,10 +1,18 @@
 # NDI Machine
 
-Native Windows NDI-to-SDI router under development. Four persistent native workers, shared Dante USB audio capture, a reconnectable local control API and a guarded Companion fail-over button are implemented. This is a working engineering milestone, not a production-qualified release. The full WPF interface, general audio mixer and remaining capabilities are tracked in `reports/RELEASE-STATUS.md`. The user's briefs are preserved in `docs/`.
+Native Windows NDI-to-SDI application with a self-contained WPF EXE, four independent media workers and a Companion failover toggle. The desktop provides low-overhead previews, per-output NDI/DeckLink selection, Windows capture or playback-loopback audio, NDI audio, channel/gain/mute/delay controls, receiver statistics and manual IP discovery. This is an engineering build; physical signal, lip-sync and sustained operation remain unqualified. The user's briefs are preserved in `docs/`.
 
 The project is now pinned to the latest official DeckLink SDK **16.0**. Read-only compilation and hardware enumeration passed against installed Desktop Video **16.3**. See `reports/SDK-UPDATE.md` and `reports/RELEASE-STATUS.md`.
 
-Workers retain media across control-host restarts and use prepare/commit source switching. The fixed stereo audio path uses the exact commissioned Dante USB I/O Module receive 1/2 endpoint, bounded shared buffers and independent adaptive resamplers. Four concurrent outputs passed short SDK scheduling tests with video and audio. Independent physical picture/audio, lip-sync, codec variants and sustained soak qualification remain pending. See `reports/MEDIA-PROOF.md` and `reports/CONTROL-PROOF.md`.
+Workers retain media across GUI/control-host restarts and use prepare/commit settings changes. The commissioned failover preset embeds Dante USB I/O Module receive 1/2 on output 1 only; outputs 2-4 are silent. Each output can instead select a different stereo source. Shared capture and independent adaptive resamplers control audio drift. See `docs/DESKTOP.md` for controls and packaging, and `reports/RELEASE-STATUS.md` for validation and remaining work.
+
+Build the EXE after the native targets:
+
+```powershell
+.\scripts\Build-Desktop.ps1 -IncludeLocalConfiguration
+```
+
+Launch `dist\NDI Machine\NDI Machine.exe` and keep its companion folders beside it. The optional local configuration makes this a private workstation package; do not publish it. A clean source build without that switch includes only the example configuration. Installed NDI Runtime, Desktop Video and VC++ x64 runtime are required.
 
 Open the folder in VS Code:
 

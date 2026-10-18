@@ -1,9 +1,15 @@
-param([string]$ConfigurationPath)
+param([string]$ConfigurationPath, [switch]$Development)
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
+$package=Join-Path $root 'dist\NDI Machine'
+if(!$Development -and (Test-Path -LiteralPath (Join-Path $package 'engine\NDIMachine.Control.exe'))) {
+  $root=$package
+  $exe=Join-Path $root 'engine\NDIMachine.Control.exe'
+} else {
+  $exe=Join-Path $root 'control\bin\Release\net8.0-windows\win-x64\NDIMachine.Control.exe'
+}
 if(!$ConfigurationPath){$ConfigurationPath=Join-Path $root 'config\local.commissioning.json'}
 $config=(Resolve-Path -LiteralPath $ConfigurationPath).Path
-$exe=Join-Path $root 'control\bin\Release\net8.0-windows\win-x64\NDIMachine.Control.exe'
 if(!(Test-Path -LiteralPath $exe)){throw 'Build control\NDIMachine.Control.csproj using x64 .NET 8.0.301 first'}
 try {
   $state=Invoke-RestMethod ('http://127.0.0.1:9860/api/v1/state?nonce='+[Guid]::NewGuid()) -TimeoutSec 3

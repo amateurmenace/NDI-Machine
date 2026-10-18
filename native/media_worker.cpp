@@ -1,8 +1,10 @@
 #include "sdi_engine.h"
 #include "pipe_server.h"
+#include "preview.h"
 #include <thread>
 #include <deque>
 #include <iomanip>
+#include <fstream>
 
 static int64_t milliseconds()
 {
@@ -16,16 +18,26 @@ static std::string operation_id()
 struct Route
 {
     std::unique_ptr<Receiver> receiver;
+    nm::OutputSettings settings;
+    std::unique_ptr<nm::audio::Mapping> mapping;
+    std::unique_ptr<nm::audio::Reader> audioReader;
     std::string source, operation;
     uint64_t revision{};
     int64_t lastObserved{}, lastCount{}, lastArrival{-1}; // control thread until commit
     std::atomic<int> references{0};
-    explicit Route(std::string name) : receiver(std::make_unique<Receiver>(name)), source(std::move(name)), operation(operation_id()) {}
+    explicit Route(nm::OutputSettings configuration) : settings(std::move(configuration)), source(settings.source), operation(operation_id()) {
+        receiver=std::make_unique<Receiver>(source,settings.url,settings.bandwidth);
+        if(settings.audioMode=="fixed") {
+            const auto name=settings.audioKey.empty() ? std::wstring(nm::audio::default_mapping) :
+                L"Local\\NDIMachine.Audio." + std::wstring(settings.audioKey.begin(),settings.audioKey.end());
+            mapping=std::make_unique<nm::audio::Mapping>(false,name.c_str());
+            audioReader=std::make_unique<nm::audio::Reader>(mapping->get(),settings.endpoint);
+        }
+    }
 };
-static std::unique_ptr<Route> prepare_route(const std::string& source)
+static std::unique_ptr<Route> prepare_route(const nm::OutputSettings& settings)
 {
-    if (source.empty() || source.size() > 512) throw std::runtime_error("Exact NDI source name required (1..512 UTF-8 bytes)");
-    auto route = std::make_unique<Route>(source);
+    auto route = std::make_unique<Route>(settings);
     const auto finish = Clock::now() + std::chrono::seconds(10);
     while (Clock::now() < finish) {
         NDIlib_video_frame_v2_t frame{};
@@ -34,19 +46,26 @@ static std::unique_ptr<Route> prepare_route(const std::string& source)
         NDIlib_framesync_free_video(route->receiver->sync, &frame);
         NDIlib_recv_performance_t received{};
         NDIlib_recv_get_performance(route->receiver->rx, &received, nullptr);
-        if (valid && received.video_frames > 0) {
+        bool ndiAudioReady=true;
+        if(settings.audioMode=="ndi") {
+            NDIlib_audio_frame_v2_t audio{};
+            NDIlib_framesync_capture_audio(route->receiver->sync,&audio,48000,0,1602);
+            ndiAudioReady=received.audio_frames>0 && audio.p_data && audio.no_channels>=std::max(settings.left,settings.right);
+            if(audio.p_data)NDIlib_framesync_free_audio(route->receiver->sync,&audio);
+        }
+        if (valid && received.video_frames > 0 && ndiAudioReady && (!route->audioReader || route->audioReader->ready())) {
             route->lastObserved = route->lastArrival = milliseconds(); route->lastCount = received.video_frames;
             return route;
         }
         Sleep(10);
     }
-    throw std::runtime_error("Source preparation timed out: require received progressive 1080p29.97 UYVY; existing output preserved");
+    throw std::runtime_error("Preparation timed out: require fresh decodable NDI video and selected Windows audio; existing output preserved");
 }
 class WorkerControl final : public EngineHooks
 {
     int slot_;
-    std::string device_, endpoint_, epoch_{operation_id()};
-    nm::audio::Shared& audio_;
+    std::string device_, epoch_{operation_id()};
+    nm::preview::Writer preview_;
     std::vector<std::unique_ptr<Route>> owned_; // control thread only; bounded to eight routes.
     Route* prepared_{};
     Route* scheduled_{}; // media thread only after construction
@@ -55,6 +74,10 @@ class WorkerControl final : public EngineHooks
     std::atomic<bool> videoGood_{false}, audioGood_{false}, displayGood_{false};
     std::atomic<uint64_t> completed_{}, late_{}, dropped_{}, fallback_{}, repeats_{};
     std::atomic<float> gain_{1};
+    std::atomic<float> peakL_{},peakR_{};
+    std::atomic<double> bufferFrames_{},correctionPpm_{};
+    std::atomic<uint64_t> clips_{};
+    std::atomic<int> width_{},height_{},fpsN_{},fpsD_{},fourcc_{};
     std::atomic<bool> stop_{false};
     struct Cached { std::string request; json reply; };
     std::deque<std::pair<std::string, Cached>> operations_; // control thread only, max 64
@@ -72,12 +95,17 @@ class WorkerControl final : public EngineHooks
     }
 public:
     Handle controlStop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-    WorkerControl(int slot, std::string device, std::string endpoint, nm::audio::Shared& audio, std::unique_ptr<Route> route)
-        : slot_(slot), device_(std::move(device)), endpoint_(std::move(endpoint)), audio_(audio), scheduled_(route.get())
+    WorkerControl(int slot, std::string device, std::unique_ptr<Route> route)
+        : slot_(slot), device_(std::move(device)),
+          preview_(L"Local\\NDIMachine.Preview." + std::to_wstring(slot) + L"." + std::wstring(epoch_.begin(), epoch_.end())),
+          scheduled_(route.get())
     {
         route->revision = 1; route->references = 1; owned_.push_back(std::move(route));
     }
     ~WorkerControl() override = default;
+    void preview(const NDIlib_video_frame_v2_t& frame, bool good) noexcept override {
+        preview_.publish(frame.p_data, frame.line_stride_in_bytes, good, scheduled_->revision);
+    }
     Receiver* beginFrame(Frame& frame) noexcept override
     {
         if (auto next = pending_.exchange(nullptr)) {
@@ -108,24 +136,55 @@ public:
         completed_ = completed; late_ = late; dropped_ = dropped; fallback_ = fallback; repeats_ = repeats;
         metricsRoute_ = scheduled_;
     }
-    float gainTarget() const noexcept override { return gain_.load(); }
+    const nm::OutputSettings* settings() const noexcept override { return &scheduled_->settings; }
+    nm::audio::Reader* audioReader() noexcept override { return scheduled_->audioReader.get(); }
+    float gainTarget() const noexcept override {
+        const auto& s=scheduled_->settings;
+        return s.muted || s.audioMode=="silent" ? 0.0f : static_cast<float>(std::pow(10,s.gainDb/20));
+    }
+    void details(const NDIlib_video_frame_v2_t& frame, float left, float right, uint64_t clips, double buffer, double correction) noexcept override {
+        width_=frame.xres; height_=frame.yres; fpsN_=frame.frame_rate_N; fpsD_=frame.frame_rate_D; fourcc_=frame.FourCC;
+        peakL_=left; peakR_=right; clips_+=clips; bufferFrames_=buffer; correctionPpm_=correction;
+    }
     bool stopRequested() const noexcept override { return stop_.load(); }
     void requestStop() { stop_ = true; }
     json state()
     {
         const auto now = milliseconds(); auto route = displayed_.load();
         auto age = [now](int64_t stamp) { return stamp < 0 || now < stamp ? int64_t(2147483647) : now - stamp; };
-        const auto audioStamp = nm::audio::load(audio_.lastPacketQpc), frequency = nm::audio::load(audio_.frequency);
-        const auto audioAge = frequency > 0 && audioStamp > 0 ? (nm::qpc() - audioStamp) * 1000 / frequency : int64_t(2147483647);
-        const bool freshAudio = nm::audio::fresh(audio_, nm::qpc()) && audioGood_.load();
+        const auto& settings = (route ? route : scheduled_)->settings;
+        int64_t audioAge=age(audioArrival_); bool freshAudio=audioGood_.load();
+        if (settings.audioMode=="silent") {audioAge=0;freshAudio=true;}
+        else if (route && route->mapping) {
+            const auto& audio=route->mapping->get();
+            const auto stamp=nm::audio::load(audio.lastPacketQpc), frequency=nm::audio::load(audio.frequency);
+            audioAge=frequency>0 && stamp>0 ? (nm::qpc()-stamp)*1000/frequency : int64_t(2147483647);
+            freshAudio=freshAudio && nm::audio::fresh(audio,nm::qpc());
+        }
+        NDIlib_recv_performance_t received{}, dropped{}; NDIlib_recv_queue_t queues{};
+        int connections{};
+        if(route) {
+            NDIlib_recv_get_performance(route->receiver->rx,&received,&dropped);
+            NDIlib_recv_get_queue(route->receiver->rx,&queues);
+            connections=NDIlib_recv_get_no_connections(route->receiver->rx);
+        }
         const bool healthy = !stop_ && route && route == metricsRoute_.load() && age(lastCompletion_) < 500 &&
             age(videoArrival_) < 500 && videoGood_ && displayGood_ && freshAudio && !late_ && !dropped_;
         return {{"slot", slot_}, {"deviceId", device_}, {"source", route ? route->source : ""}, {"backend", "hardware"},
-            {"workerInstanceId", epoch_}, {"running", route != nullptr && !stop_}, {"configRevision", route ? route->revision : 0},
+            {"workerInstanceId", epoch_}, {"previewMapping", nm::utf8(preview_.name.c_str())},
+            {"running", route != nullptr && !stop_}, {"configRevision", route ? route->revision : 0},
             {"committedOperationId", route ? route->operation : ""}, {"videoAgeMs", age(videoArrival_)}, {"scheduleAgeMs", age(lastCompletion_)},
             {"fallback", !videoGood_.load() || !displayGood_.load()}, {"format", "1920x1080p30000/1001"},
-            {"health", healthy ? "healthy" : "not-ready"}, {"audio", {{"mode", "fixed"}, {"endpointId", endpoint_},
-                {"channels", {1,2}}, {"ageMs", freshAudio ? audioAge : int64_t(2147483647)}, {"muted", gain_ == 0}}},
+            {"settings",settings.json()}, {"capabilities",{"output-settings","preview"}},
+            {"health", healthy ? "healthy" : "not-ready"}, {"audio", {{"mode", settings.audioMode}, {"endpointId", settings.endpoint},
+                {"channels", {settings.left,settings.right}}, {"ageMs", freshAudio ? audioAge : int64_t(2147483647)},
+                {"muted", settings.muted || settings.audioMode=="silent"},{"gainDb",settings.gainDb},{"delayMs",settings.delayMs},
+                {"peak",{peakL_.load(),peakR_.load()}},{"clippedSamples",clips_.load()},
+                {"bufferMs",bufferFrames_.load()/48},{"clockCorrectionPpm",correctionPpm_.load()}}},
+            {"ndi",{{"width",width_.load()},{"height",height_.load()},{"fpsN",fpsN_.load()},{"fpsD",fpsD_.load()},
+                {"fourCC",fourcc_.load()},{"connections",connections},{"videoReceived",received.video_frames},
+                {"audioReceived",received.audio_frames},{"videoDropped",dropped.video_frames},{"audioDropped",dropped.audio_frames},
+                {"videoQueue",queues.video_frames},{"audioQueue",queues.audio_frames},{"bandwidth",settings.bandwidth}}},
             {"counters", {{"completed", completed_.load()}, {"late", late_.load()}, {"dropped", dropped_.load()},
                 {"fallback", fallback_.load()}, {"inputRepeats", repeats_.load()}}}, {"physicalSignalVerified", "Unknown"}};
     }
@@ -143,7 +202,9 @@ public:
         if (method == "stop") { requestStop(); result = {{"ok", true}, {"accepted", true}}; }
         else if (method == "prepare") {
             if (pending_.load()) throw std::runtime_error("A source commit is in flight");
-            auto candidate = prepare_route(request.at("source").get<std::string>());
+            auto configuration = request.contains("settings") ? nm::OutputSettings::parse(request.at("settings")) : (displayed_.load() ? displayed_.load() : scheduled_)->settings;
+            if (!request.contains("settings")) { configuration.source=request.at("source").get<std::string>(); configuration.url=""; }
+            auto candidate = prepare_route(configuration);
             prepared_ = nullptr; collect();
             if (owned_.size() >= 8) throw std::runtime_error("Route preparation capacity exhausted");
             prepared_ = candidate.get();
@@ -183,7 +244,7 @@ public:
 int main(int argc, char** argv)
 {
     try {
-        int slot{}; std::string deviceId, source, endpoint;
+        int slot{}; std::string deviceId, source, endpoint, configPath;
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
             if (i + 1 >= argc) throw std::runtime_error("Worker argument value missing");
@@ -191,9 +252,15 @@ int main(int argc, char** argv)
             else if (arg == "--device") deviceId = argv[++i];
             else if (arg == "--source") source = argv[++i];
             else if (arg == "--audio-endpoint") endpoint = argv[++i];
+            else if (arg == "--config") configPath = argv[++i];
             else throw std::runtime_error("Unknown worker argument");
         }
-        if (slot < 1 || slot > 4 || deviceId.empty() || source.empty() || endpoint.empty()) throw std::runtime_error("Explicit slot, stable DeckLink ID, source and audio endpoint required");
+        if (slot < 1 || slot > 4 || deviceId.empty()) throw std::runtime_error("Explicit slot and stable DeckLink ID required");
+        nm::OutputSettings settings;
+        if (!configPath.empty()) {
+            std::ifstream stream(configPath); json configuration; stream >> configuration;
+            settings=nm::OutputSettings::parse(configuration);
+        } else settings=nm::OutputSettings::parse({{"source",source},{"audioMode","fixed"},{"audioEndpoint",endpoint}});
         Com com;
         Ownership slotOwner(L"Global\\NDIMachine.slot." + std::to_wstring(slot));
         size_t used{}; const auto selected = std::stoull(deviceId, &used, 0);
@@ -211,14 +278,11 @@ int main(int argc, char** argv)
         if (!chosen) throw std::runtime_error("Configured DeckLink missing; no substitution");
         if (!NDIlib_initialize()) throw std::runtime_error("NDI runtime unavailable");
         struct Runtime { ~Runtime(){ NDIlib_destroy(); } } runtime;
-        nm::audio::Mapping audioMapping(false);
-        auto audioReader = std::make_unique<nm::audio::Reader>(audioMapping.get(), endpoint);
-        auto route = prepare_route(source);
-        if (!audioReader->ready()) throw std::runtime_error("Exact external audio host is not fresh and primed");
-        WorkerControl control(slot, deviceId, endpoint, audioMapping.get(), std::move(route));
+        auto route = prepare_route(settings);
+        WorkerControl control(slot, deviceId, std::move(route));
         std::jthread server([&]{ control.serve(); });
         struct StopServer { WorkerControl& control; ~StopServer(){ SetEvent(control.controlStop); } } stopServer{control};
-        Output output(chosen.Get(), slot, deviceId, false, nullptr, audioReader.get(), &control);
+        Output output(chosen.Get(), slot, deviceId, false, nullptr, nullptr, &control);
         output.run(0);
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

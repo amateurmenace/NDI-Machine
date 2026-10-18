@@ -10,6 +10,8 @@
 #include "DeckLinkAPI.h"
 #include "media_core.h"
 #include "audio_reader.h"
+#include "output_settings.h"
+#include "video_convert.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -137,13 +139,15 @@ struct Receiver
 {
     NDIlib_recv_instance_t rx{};
     NDIlib_framesync_instance_t sync{};
-    explicit Receiver(const std::string &name)
+    explicit Receiver(const std::string &name, const std::string& url = "", const std::string& bandwidth = "highest")
     {
         NDIlib_recv_create_v3_t c{};
         c.source_to_connect_to.p_ndi_name = name.c_str();
+        c.source_to_connect_to.p_url_address = url.empty() ? nullptr : url.c_str();
         c.color_format = NDIlib_recv_color_format_UYVY_BGRA;
-        c.allow_video_fields = true;
-        c.p_ndi_recv_name = "NDI Machine SDI qualification";
+        c.bandwidth = bandwidth == "lowest" ? NDIlib_recv_bandwidth_lowest : NDIlib_recv_bandwidth_highest;
+        c.allow_video_fields = false;
+        c.p_ndi_recv_name = "NDI Machine";
         rx = NDIlib_recv_create_v3(&c);
         if (!rx)
             throw std::runtime_error("Receiver creation failed");
@@ -165,9 +169,10 @@ struct Receiver
 };
 static bool usable(const NDIlib_video_frame_v2_t &v)
 {
-    return v.p_data && v.xres == 1920 && v.yres == 1080 && v.FourCC == NDIlib_FourCC_type_UYVY &&
-           v.line_stride_in_bytes >= 3840 && v.frame_format_type == NDIlib_frame_format_type_progressive &&
-           v.frame_rate_N == 30000 && v.frame_rate_D == 1001;
+    return v.p_data && v.xres >= 2 && v.xres <= 8192 && !(v.xres & 1) && v.yres > 0 && v.yres <= 4320 &&
+        (v.FourCC == NDIlib_FourCC_type_UYVY || v.FourCC == NDIlib_FourCC_type_BGRA || v.FourCC == NDIlib_FourCC_type_BGRX) &&
+        v.line_stride_in_bytes >= v.xres * (v.FourCC == NDIlib_FourCC_type_UYVY ? 2 : 4) &&
+        v.frame_format_type == NDIlib_frame_format_type_progressive && v.frame_rate_N > 0 && v.frame_rate_D > 0;
 }
 // Render and convert the labelled SDR Rec.709 test pattern once, before playback.
 static std::vector<uint8_t> pattern(int slot, const std::string &device, bool bars)
@@ -245,6 +250,10 @@ struct EngineHooks {
         uint64_t completed, uint64_t late, uint64_t dropped, uint64_t fallback, uint64_t repeats) noexcept = 0;
     virtual float gainTarget() const noexcept = 0;
     virtual bool stopRequested() const noexcept = 0;
+    virtual void preview(const NDIlib_video_frame_v2_t&, bool) noexcept {}
+    virtual const nm::OutputSettings* settings() const noexcept { return nullptr; }
+    virtual nm::audio::Reader* audioReader() noexcept { return nullptr; }
+    virtual void details(const NDIlib_video_frame_v2_t&, float, float, uint64_t, double, double) noexcept {}
 };
 class Output
 {
@@ -264,6 +273,9 @@ class Output
     std::array<nm::audio::Stereo, 1602> externalPcm_{};
     std::array<float, 2> lastAudio_{};
     EngineHooks* hooks_{};
+    nm::AudioDelay delay_;
+    const nm::OutputSettings* lastSettings_{};
+    std::vector<uint8_t> converted_ = std::vector<uint8_t>(1920 * 1080 * 2);
 
   public:
     uint64_t completed{}, late{}, dropped{}, flushed{}, fallbackFrames{}, inputRepeats{};
@@ -334,7 +346,11 @@ class Output
         if (hooks_) {
             auto next = hooks_->beginFrame(f);
             if (next != rx_) { rx_ = next; videoFresh_ = {}; audioFresh_ = {}; previousTimestamp_ = INT64_MIN; }
+            externalAudio_ = hooks_->audioReader();
         }
+        const auto settings = hooks_ ? hooks_->settings() : nullptr;
+        if (settings != lastSettings_) { delay_.reset(settings ? settings->delayMs : 0); lastSettings_ = settings; }
+        const bool silent = settings && settings->audioMode == "silent";
         const int64_t now =
             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
         NDIlib_video_frame_v2_t video{};
@@ -351,8 +367,8 @@ class Output
             audioFresh_.observe(stats.audio_frames, now);
             NDIlib_framesync_capture_video(rx_->sync, &video);
             good = usable(video) && videoFresh_.fresh(now);
-            if (!externalAudio_)
-                NDIlib_framesync_capture_audio(rx_->sync, &audio, 48000, 2, count);
+            if (!externalAudio_ && !silent)
+                NDIlib_framesync_capture_audio(rx_->sync, &audio, 48000, settings ? 0 : 2, count);
         }
         // NDI-owned frames are always freed, including exceptions in DeckLink scheduling.
         struct Release
@@ -377,11 +393,13 @@ class Output
             f.buffer->EndAccess(bmdBufferAccessWrite);
             check(hr, "Frame bytes");
         }
+        if (good) nm::video::convert(video.p_data, video.xres, video.yres, video.line_stride_in_bytes,
+            video.FourCC != NDIlib_FourCC_type_UYVY, converted_.data(), 3840, settings ? settings->sizing : "fit");
         for (int row = 0; row < 1080; ++row)
         {
             auto dst = static_cast<uint8_t *>(bytes) + static_cast<size_t>(row) * rowBytes_;
             memcpy(dst,
-                   good ? video.p_data + static_cast<size_t>(row) * video.line_stride_in_bytes
+                   good ? converted_.data() + static_cast<size_t>(row) * 3840
                         : base_.data() + static_cast<size_t>(row) * 3840,
                    3840);
             if (rowBytes_ > 3840)
@@ -397,19 +415,21 @@ class Output
             previousTimestamp_ = video.timestamp;
         }
         const bool goodNdiAudio = rx_ && audioFresh_.fresh(now) && good && audio.p_data &&
-                                  audio.no_channels == 2 && audio.no_samples == count &&
+                                  audio.no_channels >= (settings ? std::max(settings->left, settings->right) : 2) && audio.no_samples == count &&
                                   audio.channel_stride_in_bytes >= count * static_cast<int>(sizeof(float));
         const bool goodAudio =
-            externalAudio_ ? externalAudio_->render(externalPcm_.data(), count) : goodNdiAudio;
+            silent || (externalAudio_ ? externalAudio_->render(externalPcm_.data(), count) : goodNdiAudio);
         if (!goodAudio && !bars_)
             ++audioFallbackBlocks;
         f.videoGood = good || bars_; f.audioGood = goodAudio || bars_;
         const float target = (bars_ || goodAudio) ? (hooks_ ? hooks_->gainTarget() : 1.0f) : 0.0f;
         if (target != audioRamp_.target)
             audioRamp_.set(target);
+        float blockPeak[2]{}; uint64_t clips{};
         for (int s = 0; s < count; ++s)
         {
             const float gain = audioRamp_.next();
+            nm::audio::Stereo pair{};
             for (int ch = 0; ch < 2; ++ch)
             {
                 float sample = goodAudio || bars_ ? 0 : lastAudio_[ch];
@@ -417,19 +437,27 @@ class Output
                     sample =
                         .1f * static_cast<float>(std::sin(6.283185307179586 * (ch ? 2000 : 1000) *
                                                           (nm::audio_position(nextFrame_) + s) / 48000.0));
+                else if (silent) sample = 0;
                 else if (goodAudio && externalAudio_)
                     sample = ch ? externalPcm_[s].right : externalPcm_[s].left;
                 else if (goodAudio)
                 {
                     auto samples = reinterpret_cast<const float *>(
-                        reinterpret_cast<const uint8_t *>(audio.p_data) + ch * audio.channel_stride_in_bytes);
+                        reinterpret_cast<const uint8_t *>(audio.p_data) + (settings ? (ch ? settings->right : settings->left) - 1 : ch) * audio.channel_stride_in_bytes);
                     sample = nm::calibrate(samples[s], nm::Calibration::Smpte);
                 }
                 if (goodAudio || bars_) lastAudio_[ch] = sample;
-                f.audio[s * 2 + ch] = nm::pcm32(sample * gain);
+                (ch ? pair.right : pair.left) = std::isfinite(sample) ? sample * gain : 0;
                 outputPeak[ch] = std::max(outputPeak[ch], std::abs(static_cast<double>(sample * gain)));
-                if (f.audio[s * 2 + ch])
-                    ++audioNonzeroSamples;
+            }
+            pair = delay_.process(pair);
+            const float samples[]{pair.left,pair.right};
+            for (int ch=0; ch<2; ++ch) {
+                const auto sample = silent ? 0.0f : samples[ch];
+                f.audio[s*2+ch] = nm::pcm32(sample);
+                blockPeak[ch] = std::max(blockPeak[ch], std::abs(sample));
+                if (std::abs(sample)>1) ++clips;
+                if (f.audio[s*2+ch]) ++audioNonzeroSamples;
             }
         }
         uint32_t offset = 0;
@@ -444,6 +472,13 @@ class Output
             offset += written;
         }
         check(output_->ScheduleVideoFrame(f.video.Get(), nextFrame_ * 1001, 1001, 30000), "Schedule video");
+        // Optional bounded preview after scheduling, never inside SDK callbacks.
+        if (hooks_) {
+            auto preview = video; preview.p_data = converted_.data(); preview.line_stride_in_bytes = 3840;
+            hooks_->preview(preview, good);
+            hooks_->details(video, blockPeak[0], blockPeak[1], clips,
+                externalAudio_ ? externalAudio_->bufferFrames : 0, externalAudio_ ? externalAudio_->correctionPpm : 0);
+        }
         ++nextFrame_;
         if (hooks_) hooks_->metrics(videoFresh_.last_change_ms, audioFresh_.last_change_ms, f.videoGood, f.audioGood,
             completed, late, dropped, fallbackFrames, inputRepeats);

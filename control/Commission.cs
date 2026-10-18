@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace NDIMachine.Control;
 
-public sealed record OutputAssignment(int Slot, string Device, string Source);
+public sealed record OutputAssignment(int Slot, string Device, string Source, string AudioMode = "fixed");
 public sealed class Commission
 {
     public string FilePath { get; }
@@ -28,9 +28,9 @@ public sealed class Commission
             audio["calibration"]?.GetValue<string>() != "unity")
             throw new InvalidDataException("This build requires explicit fixed WASAPI stereo 1/2 and unity PCM calibration");
         Outputs = config["outputs"]!.AsArray().Select(o => new OutputAssignment(o!["slot"]!.GetValue<int>(),
-            o["device"]!.GetValue<string>().ToLowerInvariant(), o["source"]!.GetValue<string>())).ToArray();
+            o["device"]!.GetValue<string>().ToLowerInvariant(), o["source"]!.GetValue<string>(), o["audioMode"]?.GetValue<string>() ?? "fixed")).ToArray();
         if (Outputs.Length is < 1 or > 4 || Outputs.Any(o => o.Slot is < 1 or > 4 ||
-                !Regex.IsMatch(o.Device, "^0x[0-9a-f]{1,16}$") || Encoding.UTF8.GetByteCount(o.Source) is < 1 or > 512) ||
+                !Regex.IsMatch(o.Device, "^0x[0-9a-f]{1,16}$") || o.AudioMode is not ("fixed" or "silent") || Encoding.UTF8.GetByteCount(o.Source) is < 1 or > 512) ||
             Outputs.Select(o => o.Slot).Distinct().Count() != Outputs.Length ||
             Outputs.Select(o => o.Device).Distinct().Count() != Outputs.Length)
             throw new InvalidDataException("Invalid or duplicate output assignments");
@@ -44,6 +44,7 @@ public sealed class Commission
                 throw new InvalidDataException("Invalid commissioned Videohub ports");
             paths.Add(new JsonObject { ["slot"] = assignment.Slot, ["destination"] = destination,
                 ["normalInput"] = normal, ["backupInput"] = backup, ["device"] = assignment.Device, ["source"] = assignment.Source });
+            if (config["outputs"]!.AsArray().Any(o=>o?["slot"]?.GetValue<int>()==assignment.Slot && o["audioMode"]!=null)) paths.Last()!["audioMode"] = assignment.AudioMode;
         }
         if (paths.Select(p => p!["destination"]!.GetValue<int>()).Distinct().Count() != paths.Count ||
             paths.Select(p => p!["backupInput"]!.GetValue<int>()).Distinct().Count() != paths.Count)

@@ -1,0 +1,32 @@
+<Window x:Class="NDIMachine.Desktop.OutputEditor" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Output settings — NDI Machine" Width="940" Height="820" MinWidth="820" MinHeight="650" WindowStartupLocation="CenterOwner" Style="{StaticResource {x:Type Window}}">
+ <Border Background="{StaticResource Canvas}" Padding="26"><DockPanel TextElement.Foreground="{StaticResource Ink}">
+  <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20"><TextBlock x:Name="Heading" FontSize="26" FontWeight="SemiBold"/><TextBlock Text="Prepare the source, then apply at a video frame boundary. Changing DeckLink connectors briefly interrupts this output." Foreground="{StaticResource Muted}" Margin="0,8,0,0"/></StackPanel>
+  <StackPanel DockPanel.Dock="Bottom" Margin="0,16,0,0"><TextBlock x:Name="Error" Foreground="#F6BD75" Margin="0,0,0,10"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="Cancel" IsCancel="True" Margin="0,0,10,0"/><Button Content="Apply output settings" Style="{StaticResource Primary}" Click="Apply" IsDefault="True"/></StackPanel></StackPanel>
+  <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel>
+   <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="VIDEO SOURCE &amp; OUTPUT" Style="{StaticResource Label}"/>
+    <TextBlock Text="NDI source" Margin="0,12,0,6"/><ComboBox x:Name="Source" IsEditable="True" IsTextSearchEnabled="False" DisplayMemberPath="Name" SelectedValuePath="Name" SelectionChanged="SourceChanged" AutomationProperties.Name="NDI source"/>
+    <TextBlock Text="NDI transport address (optional IP:port; populated by discovery)" Margin="0,12,0,6"/><TextBox x:Name="SourceAddress" AutomationProperties.Name="NDI transport address"/>
+    <Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="18"/><ColumnDefinition/></Grid.ColumnDefinitions>
+     <StackPanel><TextBlock Text="NDI receive bandwidth" Margin="0,0,0,6"/><ComboBox x:Name="Bandwidth" SelectedValuePath="Tag" AutomationProperties.Name="Receive bandwidth"><ComboBoxItem Content="Highest · full quality" Tag="highest"/><ComboBoxItem Content="Lowest · reduced resolution / bandwidth" Tag="lowest"/></ComboBox></StackPanel>
+     <StackPanel Grid.Column="2"><TextBlock Text="Picture sizing" Margin="0,0,0,6"/><ComboBox x:Name="Sizing" SelectedValuePath="Tag" AutomationProperties.Name="Picture sizing"><ComboBoxItem Content="Fit · letterbox" Tag="fit"/><ComboBoxItem Content="Fill · crop edges" Tag="fill"/><ComboBoxItem Content="Stretch" Tag="stretch"/></ComboBox></StackPanel>
+    </Grid>
+    <TextBlock Text="DeckLink SDI connector" Margin="0,14,0,6"/><ComboBox x:Name="Device" DisplayMemberPath="Label" SelectedValuePath="Id" AutomationProperties.Name="DeckLink output"/>
+    <TextBlock Text="SDI output stays 1080p29.97 to match the ATEM. Other received sizes/rates are converted; low bandwidth reduces picture quality. Occupied connectors and the reserved OBS card cannot be claimed." FontSize="12" Foreground="{StaticResource Muted}" Margin="0,10,0,0"/>
+   </StackPanel></Border>
+   <Border Style="{StaticResource Card}" Margin="0,16,0,0"><StackPanel><TextBlock Text="EMBEDDED STEREO AUDIO" Style="{StaticResource Label}"/>
+    <TextBlock Text="Audio source" Margin="0,12,0,6"/><ComboBox x:Name="AudioMode" SelectedValuePath="Tag" SelectionChanged="AudioChanged" AutomationProperties.Name="Audio source mode"><ComboBoxItem Content="Silent · no source embedded" Tag="silent"/><ComboBoxItem Content="Windows audio device / playback loopback" Tag="fixed"/><ComboBoxItem Content="Audio from this NDI source" Tag="ndi"/></ComboBox>
+    <TextBlock Text="Windows device" Margin="0,12,0,6"/><ComboBox x:Name="AudioDevice" DisplayMemberPath="Label" SelectedValuePath="Id" AutomationProperties.Name="Windows audio device"/>
+    <Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+     <StackPanel><TextBlock Text="Left channel" Margin="0,0,0,6"/><TextBox x:Name="LeftChannel" AutomationProperties.Name="Left channel"/></StackPanel>
+     <StackPanel Grid.Column="2"><TextBlock Text="Right channel" Margin="0,0,0,6"/><TextBox x:Name="RightChannel" AutomationProperties.Name="Right channel"/></StackPanel>
+     <StackPanel Grid.Column="4"><TextBlock Text="Gain (dB)" Margin="0,0,0,6"/><TextBox x:Name="Gain" AutomationProperties.Name="Audio gain dB"/></StackPanel>
+     <StackPanel Grid.Column="6"><TextBlock Text="Delay (ms)" Margin="0,0,0,6"/><TextBox x:Name="Delay" AutomationProperties.Name="Audio delay ms"/></StackPanel>
+    </Grid>
+    <CheckBox x:Name="Muted" Content="Mute embedded audio" Foreground="{StaticResource Ink}" Margin="0,14,0,0"/>
+    <TextBlock Text="Channels 1–64 · gain −60 to +12 dB · delay 0–500 ms. Windows device settings are preserved. Playback loopback captures the selected output device's mix. Audio delay needs a measured lip-sync check." FontSize="12" Foreground="{StaticResource Muted}" Margin="0,12,0,0"/>
+   </StackPanel></Border>
+   <TextBlock Text="Prepare backups restores the commissioned camera/device assignments and Dante USB receive 1/2 on output 1; outputs 2–4 are silent. Custom settings are saved separately and may make emergency readiness unavailable." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,16,6,0"/>
+  </StackPanel></ScrollViewer>
+ </DockPanel></Border>
+</Window>

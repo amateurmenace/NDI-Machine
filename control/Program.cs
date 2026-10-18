@@ -18,6 +18,9 @@ builder.WebHost.ConfigureKestrel(options => {
 builder.Logging.ClearProviders();
 builder.Services.AddSingleton(commission);
 builder.Services.AddSingleton<WorkerPipe>();
+builder.Services.AddSingleton<IWorkerPipe>(provider => provider.GetRequiredService<WorkerPipe>());
+builder.Services.AddSingleton<Discovery>();
+builder.Services.AddSingleton<Inventory>();
 builder.Services.AddSingleton<Supervisor>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<Supervisor>());
 var app = builder.Build();
@@ -41,6 +44,25 @@ app.MapGet("/api/v1/state", async (HttpContext context, Supervisor supervisor) =
     return Results.Json(await supervisor.State(nonce, context.RequestAborted));
 });
 app.MapGet("/api/v1/commission", () => Results.Json(commission.Plan));
+app.MapGet("/api/v1/sources", async (Discovery discovery, HttpContext context) => Results.Json(await discovery.Get(context.RequestAborted)));
+app.MapGet("/api/v1/inventory", async (Inventory inventory,HttpContext context) => Results.Json(await inventory.Get(context.RequestAborted)));
+app.MapGet("/api/v1/discovery", (Discovery discovery)=>Results.Json(discovery.Settings()));
+app.MapPut("/api/v1/discovery",async (Discovery discovery,HttpContext context)=> {
+    if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
+    return Results.Json(discovery.Set(await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Discovery settings required")));
+});
+app.MapPut("/api/v1/outputs/{slot:int}/settings", async (int slot,HttpContext context,Supervisor supervisor)=>{
+    if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
+    var request=await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Settings required");
+    if(request["slot"]?.GetValue<int>()!=slot)return Results.BadRequest(new{error="Output path and body differ"});
+    return Results.Json(supervisor.AcceptConfiguration(context.Request.Headers["Idempotency-Key"].ToString(),request),statusCode:202);
+});
+app.MapPut("/api/v1/outputs/{slot:int}/route", async (int slot, HttpContext context, Supervisor supervisor) => {
+    if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
+    var request = await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Request required");
+    if (request["slot"]?.GetValue<int>() != slot) return Results.BadRequest(new { error = "Output path and body differ" });
+    return Results.Json(supervisor.AcceptRoute(context.Request.Headers["Idempotency-Key"].ToString(), request), statusCode: 202);
+});
 app.MapPost("/api/v1/emergency/prepare", async (HttpContext context, Supervisor supervisor) => {
     if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
     var request = await context.Request.ReadFromJsonAsync<JsonObject>();

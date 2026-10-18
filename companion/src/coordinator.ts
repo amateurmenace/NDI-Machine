@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { HubSnapshot, Router } from './videohub.js'
 
-export type Path = {slot: number; destination: number; normalInput: number; backupInput: number; device: string; source: string}
+export type Path = {slot: number; destination: number; normalInput: number; backupInput: number; device: string; source: string; audioMode?: 'fixed' | 'silent'}
 export type Plan = {schemaVersion: 1; name: string; audioEndpointId: string; paths: Path[]}
 export type ReadyOutput = {
   slot: number; deviceId: string; source: string; backend: string; running: boolean;
@@ -23,7 +23,7 @@ export function validatePlan(raw: unknown): Plan {
     if (!Number.isSafeInteger(path.slot) || path.slot < 1 || path.slot > 4 ||
         !/^0x[0-9a-f]+$/i.test(path.device) || typeof path.source !== 'string' || !path.source ||
         [path.destination, path.normalInput, path.backupInput].some(port => !Number.isSafeInteger(port) || port < 1 || port > 4096) ||
-        path.normalInput === path.backupInput) throw new Error('Invalid commissioned path')
+        path.normalInput === path.backupInput || (path.audioMode !== undefined && !['fixed', 'silent'].includes(path.audioMode))) throw new Error('Invalid commissioned path')
   }
   if (new Set(plan.paths.map(path => path.device.toLowerCase())).size !== plan.paths.length) throw new Error('Duplicate device')
   return structuredClone(plan)
@@ -41,6 +41,10 @@ export function readiness(plan: Plan, state: MediaState): string | undefined {
         !Number.isSafeInteger(output.configRevision) || output.configRevision < 1 || !output.committedOperationId)
       return `Output ${path.slot}: exact source/device/format is not freshly committed and healthy`
     const audio = output.audio
+    if (path.audioMode === 'silent') {
+      if (!audio || audio.mode !== 'silent' || !audio.muted) return `Output ${path.slot}: silent audio policy is not committed`
+      continue
+    }
     if (!audio || audio.mode !== 'fixed' || audio.endpointId?.toLowerCase() !== plan.audioEndpointId.toLowerCase() ||
         JSON.stringify(audio.channels) !== '[1,2]' || !age(audio.ageMs) || audio.muted)
       return `Output ${path.slot}: Dante USB receive 1/2 audio is not freshly ready`
@@ -53,13 +57,14 @@ function revisions(plan: Plan, state: MediaState): string {
     return [output.slot, output.configRevision, output.committedOperationId]
   })])
 }
-export function takeReadiness(plan: Plan, snapshot: HubSnapshot): string | undefined {
+export function takeReadiness(plan: Plan, snapshot: HubSnapshot, overwrite = false): string | undefined {
   if (performance.now() - snapshot.sampledAt > 1500) return 'Videohub snapshot stale'
   for (const path of plan.paths) {
     if (path.destination > snapshot.outputs || Math.max(path.normalInput, path.backupInput) > snapshot.inputs) return 'Plan exceeds connected router port count'
     if (snapshot.locks.get(path.destination) !== 'U') return `Destination ${path.destination} locked or lock state unknown`
     const current = snapshot.routes.get(path.destination)
-    if (current !== path.normalInput && current !== path.backupInput) return `Destination ${path.destination}: intervening manual route ${current}`
+    if (!Number.isSafeInteger(current) || current! < 1 || current! > snapshot.inputs) return `Destination ${path.destination}: unknown input`
+    if (!overwrite && current !== path.normalInput && current !== path.backupInput) return `Destination ${path.destination}: intervening manual route ${current}`
   }
   return undefined
 }
@@ -70,13 +75,12 @@ export function routeMode(plan: Plan, snapshot: HubSnapshot): RouteMode {
   return 'MIXED'
 }
 export function toggleReadiness(plan: Plan, snapshot: HubSnapshot, engineReason?: string): string | undefined {
-  const reason = takeReadiness(plan, snapshot)
+  const reason = takeReadiness(plan, snapshot, true)
   if (reason) return reason
   const mode = routeMode(plan, snapshot)
-  if (mode === 'MIXED') return 'Mixed routes: use explicit Take All or independent manual controls; toggle direction is ambiguous'
   // A deliberate return to the commissioned fiber inputs must remain possible
   // if the backup media PC is unavailable. Network take still requires media.
-  return mode === 'FIBER' ? engineReason : undefined
+  return mode !== 'NETWORK' ? engineReason : undefined
 }
 export class HttpMedia implements Media {
   constructor(private base: string) {
@@ -103,10 +107,13 @@ export class HttpMedia implements Media {
   }
 }
 export type Outcome = {id: string; state: 'confirmed' | 'blocked' | 'partial' | 'unknown'; confirmed: number[]; reason: string; target?: 'FIBER' | 'NETWORK'}
-export interface TransitionAudio { prepare(target: 'FIBER' | 'NETWORK'): Promise<() => Promise<string>> }
+export type PrepareUndoAudio = () => Promise<() => Promise<string>>
+export interface TransitionAudio { prepare(target: 'FIBER' | 'NETWORK'): Promise<() => Promise<string>>; captureUndo?(): Promise<PrepareUndoAudio> }
 export class Coordinator {
   busy = false
   private ledger = new Map<number, {epoch: number; change: number}>()
+  private undoState?: {routes: Map<number, number>; audio?: PrepareUndoAudio}
+  get canUndo(): boolean { return this.undoState !== undefined }
   constructor(readonly plan: Plan, private hub: Router, private media: Media, private audio?: TransitionAudio) {}
   private preflight(snapshot: HubSnapshot, returning: boolean, observedToggle = false): void {
     if (performance.now() - snapshot.sampledAt > 1500) throw new Error('Videohub snapshot stale')
@@ -120,7 +127,8 @@ export class Coordinator {
         const ledger = this.ledger.get(path.destination)
         if (!ledger || ledger.epoch !== snapshot.epoch || ledger.change !== snapshot.changes.get(path.destination) || current !== path.backupInput)
           throw new Error(`Destination ${path.destination}: no unchanged confirmed take; use independent manual controls`)
-      } else if (current !== path.normalInput && current !== path.backupInput) throw new Error(`Destination ${path.destination}: intervening manual route ${current}`)
+      } else if (!observedToggle && current !== path.normalInput && current !== path.backupInput) throw new Error(`Destination ${path.destination}: intervening manual route ${current}`)
+      if (!Number.isSafeInteger(current) || current! < 1 || current! > snapshot.inputs) throw new Error('Current route is unknown')
     }
   }
   take(returning = false): Promise<Outcome> { return this.run(returning ? 'return' : 'take') }
@@ -134,12 +142,11 @@ export class Coordinator {
     try {
       const initial = await this.hub.snapshot()
       const mode = routeMode(this.plan, initial)
-      if (command === 'toggle' && mode === 'MIXED') throw new Error('Mixed routes: toggle blocked; use explicit Take All or independent manual controls')
       const returning = command === 'return' || (command === 'toggle' && mode === 'NETWORK')
       result.target = returning ? 'FIBER' : 'NETWORK'
       // The toggle is an explicit request to invert the currently read-back
-      // complete group, including after module restart. It never relies on a
-      // remembered press count or adopts unrelated/partially changed routes.
+      // group. A deliberate short press overwrites any valid unlocked current
+      // routes: NETWORK -> FIBER; every other arrangement -> NETWORK.
       this.preflight(initial, returning, command === 'toggle')
       let expectedRevision = ''
       if (!returning) {
@@ -149,6 +156,10 @@ export class Coordinator {
         expectedRevision = revisions(this.plan, state)
       }
       const completeAudio = await this.audio?.prepare(result.target)
+      const undo = {routes: new Map(initial.routes), audio: await this.audio?.captureUndo?.()}
+      // Retain one pre-change snapshot even when the ensuing operation is partial.
+      // Restoring it always requires a new deliberate three-second hold/release.
+      this.undoState = undo
       for (const path of this.plan.paths) {
         if (!returning) {
           const state = await this.media.state()
@@ -192,6 +203,51 @@ export class Coordinator {
       result.state = sent ? 'unknown' : completedRouting || result.confirmed.length ? 'partial' : 'blocked'
       result.reason = error instanceof Error ? error.message : String(error)
     } finally { this.busy = false }
+    return result
+  }
+  async undo(): Promise<Outcome> {
+    const result: Outcome = {id: randomUUID(), state: 'blocked', confirmed: [], reason: ''}
+    if (this.busy) return {...result, reason: 'An emergency operation is already running'}
+    const saved = this.undoState
+    if (!saved) return {...result, reason: 'No previous change to undo in this module session'}
+    this.busy = true
+    let sent = false
+    try {
+      const initial = await this.hub.snapshot()
+      const blocked = takeReadiness(this.plan, initial, true)
+      if (blocked) throw new Error(blocked)
+      for (const path of this.plan.paths) {
+        const target = saved.routes.get(path.destination)
+        if (!target || target > initial.inputs) throw new Error('Saved undo route is outside the connected router')
+      }
+      const audio = await saved.audio?.()
+      for (const path of this.plan.paths) {
+        const fresh = await this.hub.snapshot()
+        if (fresh.epoch !== initial.epoch) throw new Error('Videohub reconnected during undo')
+        for (const other of this.plan.paths.filter(other => !result.confirmed.includes(other.slot)))
+          if (fresh.changes.get(other.destination) !== initial.changes.get(other.destination) || fresh.locks.get(other.destination) !== 'U')
+            throw new Error(`Destination ${other.destination} changed or locked during undo`)
+        const target = saved.routes.get(path.destination)!
+        sent = fresh.routes.get(path.destination) !== target
+        await this.hub.route(path.destination, target, fresh.routes.get(path.destination)!, fresh.epoch)
+        const after = await this.hub.snapshot()
+        if (after.epoch !== initial.epoch || after.routes.get(path.destination) !== target) throw new Error('Undo crosspoint not confirmed')
+        result.confirmed.push(path.slot); sent = false
+      }
+      const beforeAudio = await this.hub.snapshot()
+      if (beforeAudio.epoch !== initial.epoch || this.plan.paths.some(p => beforeAudio.routes.get(p.destination) !== saved.routes.get(p.destination)))
+        throw new Error('Routes changed before undo audio; no audio written')
+      const audioResult = audio ? await audio() : ''
+      const last = await this.hub.snapshot()
+      if (last.epoch !== initial.epoch) {sent = true; throw new Error('Videohub reconnected after undo; outcome unknown')}
+      result.confirmed = this.plan.paths.filter(p => last.routes.get(p.destination) === saved.routes.get(p.destination)).map(p => p.slot)
+      if (result.confirmed.length !== this.plan.paths.length) throw new Error('Routes changed during undo audio')
+      result.state = 'confirmed'; result.reason = `Previous crosspoints restored; ${audioResult}; physical signal Unknown`
+      this.undoState = undefined; this.ledger.clear()
+    } catch (error) {
+      result.state = sent ? 'unknown' : result.confirmed.length ? 'partial' : 'blocked'
+      result.reason = error instanceof Error ? error.message : String(error)
+    } finally {this.busy = false}
     return result
   }
 }

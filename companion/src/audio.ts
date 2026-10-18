@@ -6,7 +6,7 @@ export type AudioTarget = 'FIBER' | 'NETWORK'
 export type AudioSource = {input: number; source: string; port: number; mix: number; supported: number[]}
 export type AudioSnapshot = {epoch: number; connected: boolean; model: number; sources: AudioSource[]}
 export interface AudioMixer { snapshot(): AudioSnapshot; setMix(input: number, source: string, mix: number): Promise<void> }
-export interface ZoomButtons { check(): Promise<void>; press(target: AudioTarget): Promise<void> }
+export interface ZoomButtons { check(): Promise<void>; press(target: AudioTarget): Promise<void>; selected?(): Promise<AudioTarget> }
 export const OFF = Enums.FairlightAudioMixOption.Off
 export const ON = Enums.FairlightAudioMixOption.On
 const enabled = {NETWORK: new Set([1]), FIBER: new Set([1001, 1501, 1502])}
@@ -50,10 +50,27 @@ export class EmergencyAudio implements TransitionAudio {
     } catch { return 'UNKNOWN' }
   }
   async check(target: AudioTarget): Promise<void> { audioPlan(this.mixer.snapshot(), target); await this.zoom.check() }
+  async captureUndo(): Promise<() => Promise<() => Promise<string>>> {
+    const saved = this.mixer.snapshot()
+    audioPlan(saved, 'NETWORK')
+    if (!this.zoom.selected) throw new Error('Cannot capture previous Zoom selection for undo')
+    const previousZoom = await this.zoom.selected()
+    return async () => {
+      const current = this.mixer.snapshot()
+      audioPlan(current, 'NETWORK'); await this.zoom.check()
+      if (topology(current) !== topology(saved)) throw new Error('ATEM source layout differs from saved undo')
+      for (const source of saved.sources)
+        if (!source.supported.includes(source.mix)) throw new Error('Saved ATEM mix option is unsupported')
+      return this.prepared(current, saved.sources, previousZoom, 'previous')
+    }
+  }
   async prepare(target: AudioTarget): Promise<() => Promise<string>> {
     const initial = this.mixer.snapshot()
     const plan = audioPlan(initial, target)
     await this.zoom.check()
+    return this.prepared(initial, plan, target, target)
+  }
+  private prepared(initial: AudioSnapshot, plan: AudioSource[], target: AudioTarget, description: string): () => Promise<string> {
     const expected = new Map(initial.sources.map(s => [key(s), s.mix]))
     let used = false
     return async () => {
@@ -74,7 +91,7 @@ export class EmergencyAudio implements TransitionAudio {
         unchanged(initial, this.mixer.snapshot(), expected)
       }
       unchanged(initial, this.mixer.snapshot(), expected)
-      return `ATEM ${target} audio confirmed; ZOOM ${target === 'NETWORK' ? 'DANTE' : 'MADI'} button dispatched`
+      return `ATEM ${description} audio confirmed; ZOOM ${target === 'NETWORK' ? 'DANTE' : 'MADI'} button dispatched`
     }
   }
 }
@@ -87,7 +104,7 @@ export class CompanionZoom implements ZoomButtons {
       throw new Error('Companion button API must be localhost HTTP')
     for (const location of [network, fiber])
       if (!/^[1-9]\d*\/\d+\/\d+$/.test(location)) throw new Error('ZOOM button must be page/row/column')
-    if (network === fiber || [network, fiber].includes('1/1/1')) throw new Error('ZOOM buttons must be distinct and cannot target the fail-over button')
+    if (network === fiber || [network, fiber].some(location => ['1/1/0', '21/1/1'].includes(location))) throw new Error('ZOOM buttons must be distinct and cannot target a commissioned fail-over button')
   }
   async check(): Promise<void> {
     const response = await fetch(new URL('/api/connections', this.base), {cache: 'no-store', signal: AbortSignal.timeout(1500)})
@@ -102,6 +119,14 @@ export class CompanionZoom implements ZoomButtons {
     const location = target === 'NETWORK' ? this.network : this.fiber
     const response = await fetch(new URL(`/api/location/${location}/press`, this.base), {method: 'POST', signal: AbortSignal.timeout(1500)})
     if (!response.ok) throw new Error(`ZOOM ${target} button dispatch failed: HTTP ${response.status}; not retried`)
+  }
+  async selected(): Promise<AudioTarget> {
+    const response = await fetch(new URL('/api/custom-variable/zoom_route/value', this.base), {cache: 'no-store', signal: AbortSignal.timeout(1500)})
+    if (!response.ok) throw new Error('Cannot capture previous Zoom button selection')
+    const value = (await response.text()).trim().replace(/^"|"$/g, '')
+    if (value === 'DANTE') return 'NETWORK'
+    if (value === 'MADI') return 'FIBER'
+    throw new Error('Previous Zoom selection is unknown; set ZOOM DANTE or ZOOM MADI before fail-over')
   }
 }
 

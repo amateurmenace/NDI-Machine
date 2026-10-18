@@ -15,6 +15,16 @@ function readyState(): MediaState {
     audio: {endpointId: plan.audioEndpointId, channels: [1, 2], mode: 'fixed', ageMs: 10, muted: false},
   }))}
 }
+test('silent backup paths require committed silence and do not require an external audio capture', () => {
+  const singleAudio = structuredClone(plan); singleAudio.paths[1]!.audioMode = 'silent'
+  const state = readyState()
+  assert.match(readiness(singleAudio, state)!, /silent audio policy/)
+  state.outputs[1]!.audio = {mode:'silent',endpointId:'',channels:[1,2],ageMs:2147483647,muted:true}
+  assert.equal(readiness(singleAudio,state),undefined)
+  assert.match(readiness(plan,state)!, /Dante USB/)
+  state.outputs[0]!.audio.muted=true
+  assert.match(readiness(singleAudio,state)!, /Output 1/)
+})
 class FakeHub implements Router {
   routes = new Map([[33, 9], [34, 10]])
   locks = new Map([[33, 'U'], [34, 'U']])
@@ -30,6 +40,12 @@ class FakeHub implements Router {
   }
   manual(destination: number, source: number): void { this.routes.set(destination, source); this.changes.set(destination, this.changes.get(destination)! + 1) }
 }
+test('mixed-route overwrite still requires fresh backup media', async () => {
+  const hub=new FakeHub();hub.manual(33,20)
+  assert.equal(toggleReadiness(plan,await hub.snapshot(),'Media unavailable'),'Media unavailable')
+  const result=await new Coordinator(plan,hub,media(()=>{throw new Error('Media unavailable')})).toggle()
+  assert.equal(result.state,'blocked');assert.equal(hub.writes.length,0)
+})
 test('audio preparation blocks video writes; audio executes only after complete video confirmation', async () => {
   const hub = new FakeHub(); const calls: string[] = []
   const audio = {prepare: async (target: string) => {calls.push(`prepare:${target}`); return async () => {
@@ -170,12 +186,13 @@ test('toggle starts from already-selected network and returns fiber without medi
   assert.equal(hub.writes.length, 2)
 })
 
-test('mixed, unrelated, locked and stale routes block toggle without advancing anything', async () => {
+test('short toggle overwrites mixed and unrelated routes; locks and stale state still block', async () => {
   const hub = new FakeHub(); const coordinator = new Coordinator(plan, hub, media())
   hub.manual(33, 8)
-  assert.match(toggleReadiness(plan, await hub.snapshot())!, /Mixed/)
-  assert.equal((await coordinator.toggle()).state, 'blocked')
-  hub.manual(33, 20); assert.equal((await coordinator.toggle()).state, 'blocked')
+  assert.equal(toggleReadiness(plan, await hub.snapshot()), undefined)
+  assert.equal((await coordinator.toggle()).state, 'confirmed')
+  hub.manual(33, 20); assert.equal((await coordinator.toggle()).state, 'confirmed')
+  hub.writes = []
   hub.manual(33, 9); hub.locks.set(34, 'L'); assert.equal((await coordinator.toggle()).state, 'blocked')
   hub.locks.set(34, 'U'); const fresh = hub.snapshot.bind(hub)
   hub.snapshot = async () => ({...await fresh(), sampledAt: performance.now() - 2000})
@@ -198,7 +215,42 @@ test('manual change during toggle return produces partial outcome and no automat
   const result = await coordinator.toggle()
   assert.equal(result.state, 'partial'); assert.equal(result.target, 'FIBER')
   assert.deepEqual(hub.writes, [[33, 9]])
-  assert.equal((await coordinator.toggle()).state, 'blocked'); assert.equal(hub.writes.length, 1)
+  // A subsequent deliberate press may overwrite the changed state; it does not
+  // happen automatically as a rollback or continuation of the failed operation.
+  hub.afterWrite = undefined
+  assert.equal((await coordinator.toggle()).state, 'confirmed'); assert.equal(hub.writes.length, 3)
+})
+
+test('undo restores exact arbitrary pre-change routes, never just assumes Fiber', async () => {
+  const hub = new FakeHub(); hub.manual(33, 22); hub.manual(34, 19)
+  const coordinator = new Coordinator(plan, hub, media())
+  assert.equal((await coordinator.undo()).state, 'blocked')
+  assert.equal((await coordinator.toggle()).state, 'confirmed'); assert.equal(coordinator.canUndo, true)
+  assert.equal((await coordinator.undo()).state, 'confirmed')
+  assert.deepEqual([...hub.routes], [[33,22],[34,19]]); assert.equal(coordinator.canUndo, false)
+  assert.equal((await coordinator.undo()).state, 'blocked')
+})
+
+test('undo remains available after a partial operation and respects current locks', async () => {
+  const hub = new FakeHub(); hub.afterWrite = () => hub.locks.set(34, 'L')
+  const coordinator = new Coordinator(plan, hub, media())
+  assert.equal((await coordinator.toggle()).state, 'partial'); assert.equal(coordinator.canUndo, true)
+  assert.equal((await coordinator.undo()).state, 'blocked')
+  hub.afterWrite = undefined; hub.locks.set(34, 'U')
+  assert.equal((await coordinator.undo()).state, 'confirmed')
+  assert.deepEqual([...hub.routes], [[33,9],[34,10]])
+})
+
+test('undo audio is preflighted before writes and applied after restored video', async () => {
+  const hub = new FakeHub(); const calls: string[] = []
+  const coordinator = new Coordinator(plan, hub, media(), {
+    prepare: async () => async () => 'take audio',
+    captureUndo: async () => async () => {calls.push('prepare undo'); return async () => {
+      assert.equal(routeMode(plan, await hub.snapshot()), 'FIBER'); calls.push('apply undo'); return 'restored audio'
+    }},
+  })
+  await coordinator.toggle(); assert.equal((await coordinator.undo()).state, 'confirmed')
+  assert.deepEqual(calls, ['prepare undo','apply undo'])
 })
 
 test('overlapping toggle presses cannot execute an opposite operation in flight', async () => {
