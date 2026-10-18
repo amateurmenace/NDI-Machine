@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "audio": {
+    "policy": "fixed",
+    "backend": "wasapi",
+    "endpointId": "REPLACE_WITH_EXACT_WASAPI_CAPTURE_ENDPOINT_ID",
+    "displayName": "Commissioned capture endpoint",
+    "channels": [1, 2],
+    "appliesToSlots": [1],
+    "calibration": "unity",
+    "physicalAudioVerified": "Unknown"
+  },
+  "videohub": {
+    "host": "REPLACE_WITH_COMMISSIONED_ROUTER_ADDRESS",
+    "port": 9990,
+    "portNumbering": "one-based-physical",
+    "paths": [
+      {"slot": 1, "atemInput": 1, "destination": 1, "normalInput": 1, "backupInput": 2}
+    ]
+  },
+  "outputs": [
+    {"slot": 1, "device": "REPLACE_WITH_STABLE_DECKLINK_HEX_ID", "source": "REPLACE_WITH_EXACT_NDI_NAME"}
+  ]
+}

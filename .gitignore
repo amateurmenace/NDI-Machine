@@ -1,0 +1,15 @@
+build/
+dist/
+.deps/
+node_modules/
+bin/
+obj/
+*.user
+*.log
+config/local.*
+reports/private/
+reports/decklink-sdk-inventory.json
+*.zip
+companion/pkg/
+companion/dist/
+companion/*.tgz

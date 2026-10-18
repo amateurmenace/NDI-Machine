@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+  "type": "connection",
+  "id": "ndi-machine",
+  "name": "NDI Machine emergency coordinator",
+  "shortname": "NDI Machine",
+  "description": "Guarded Fiber to Network backup take and readback",
+  "version": "0.1.2",
+  "license": "MIT",
+  "repository": "git+https://github.com/amateurmenace/NDI-Machine.git",
+  "bugs": "https://github.com/amateurmenace/NDI-Machine/issues",
+  "maintainers": [{"name": "Stephen Walter", "email": "2012836+amateurmenace@users.noreply.github.com"}],
+  "runtime": {"type": "node26", "api": "nodejs-ipc", "apiVersion": "2.1.3", "entrypoint": "../dist/main.js"},
+  "manufacturer": "NDI Machine",
+  "products": ["Emergency coordinator"],
+  "keywords": ["Videohub", "failover", "NDI"],
+  "legacyIds": []
+}

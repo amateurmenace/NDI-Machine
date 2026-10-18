@@ -1,0 +1,50 @@
+# NDI Machine engineering handoff
+
+This project implements the two user briefs in `docs/`. The current project name is NDI Machine.
+
+## Invariants
+
+- Maximum four independently owned SDI outputs across all cards. Never use enumeration indices as saved identities.
+- Never change DeckLink profiles automatically. OBS is running on this workstation; physical test connectors must be commissioned before enabling output.
+- Hardware and simulation are explicit modes. Simulation must never satisfy emergency readiness.
+- User confirmed the ATEM is set to 1080p29.97 (30000/1001). Physical signal qualification remains Not Run. Interlaced 59.94 is a different mode.
+- GUI and control host must not own media deadlines. SDK callbacks signal bounded work; no logging, conversion, disk or network work inside them.
+- Never treat ACK, process liveness, a thumbnail, or cached state as physical signal proof.
+- Preserve normal routes on failed preparation. Never route Videohub on reconnect or automatically return to normal.
+- Do not redistribute proprietary SDKs or runtimes without checking their actual licenses.
+- Report implemented, compiled, simulated, physically tested, and Not Run separately.
+
+## Environment observed 2026-10-18
+
+Windows 10 IoT Enterprise LTSC build 19044; Visual Studio Community 2026 18.3.2; MSVC 14.50.35717; CMake 4.3.0-rc2; x64 .NET SDK 8.0.301 (use C:\Program Files\dotnet\dotnet.exe because PATH resolves x86); Node 24.14.1; npm 11.11.0; Companion 5.1.0.
+NDI SDK/runtime 6.3.1 installed at C:\Program Files\NDI\NDI 6 SDK. Desktop Video driver 16.3.0.0 remains installed. At the user's request, project SDK upgraded to the latest official SDK 16.0, released 2026-04-08, at `.deps/Blackmagic DeckLink SDK 16.0`. SDK 15.3 remains untouched in Downloads for comparison. SDK 16.0 native IDL generation, C++20 compile/link, COM activation, and read-only enumeration all passed against runtime API 16.3. DVS 4.5.2.3 installed, licensing/readiness unverified. Exact SDK inventory belongs in reports, not assumptions from PnP names.
+
+## Work log
+
+- User explicitly authorized committing completed work and pushing to https://github.com/amateurmenace/NDI-Machine. Local Git initialized on main; origin set; connected GitHub account has push permission. Repository is public: exclude SDKs, binaries, credentials, and private diagnostic captures. Keep public validation claims honest.
+- Live read-only Videohub query reports Blackmagic Videohub 40x40 12G, protocol 2.8. Existing labelled NDI backup inputs already route to ATEM 1-4. Full snapshot is in ignored reports/private. Do not infer that a normal-to-backup commissioning plan is complete.
+
+- Created project folder, preserved both briefs, inspected dependencies without changing hardware.
+- User identified the intended outputs as NDI Machine 1-4. SDK display names are `NDI Machine` (without 1), `NDI Machine 2`, `NDI Machine 3`, and `NDI Machine 4`, persistent IDs 0xe6a968c0 through 0xe6a968c3, same device group 0xe6a968c0. All report support for 1080p29.97 UYVY and busyFlags 0 at inventory time; physical connector verification is still required.
+- User confirmed Videohub IP 192.168.20.117 and HX3 source aliases AUD CAM 1-4. Source codec variants and exact discovery names are unverified. ATEM format is operator-confirmed 1080p29.97.
+- Read-only SDK inventory found 12 subdevices in 3 DeckLink 8K Pro groups. `Key / Fill 1` reports busyFlags 2; do not change or claim its group. Do not infer an occupying application solely from this flag.
+- User interrupted initial implementation to request the latest SDK. Completed that prerequisite and added `scripts/Test-DeckLinkSdk.ps1`; no media output or card profile was changed.
+- Implemented native targets: `decklink-sdk-check`, `ndi-probe`, `ndi-sdi-proof`, `core-tests`. CTest passes 2/2, including a 72h-equivalent rational-timeline arithmetic test (not a real-time soak), calibration/ramp/finite-sample checks, and bounded concurrent queues.
+- Real AUD CAM 1 probe received progressive 1080p29.97 video and no audio packets. One scheduled output completed 298 frames in 10 seconds with zero late/dropped/fallback; four concurrent outputs each completed 448 frames in 15 seconds, all zero late/dropped/fallback. Only AUD CAM 2 supplied audio packets in that run. Physical picture/audio verification remains Unknown. See reports/MEDIA-PROOF.md.
+- Scheduled output is a diagnostic, not the production worker: fixed route, bounded duration, no live control API. Do not advertise unfinished GUI/Companion/audio mixing/emergency coordination as implemented.
+- Operator corrected the audio selection: use Dante USB I/O Module receive channels 1/2, not Dante Virtual Soundcard. The same stereo pair is assigned to all four backups. Windows reports active capture endpoint `Dante USB Receive (Dante USB I/O Module)`; exact endpoint ID is saved in ignored local.commissioning.json. Capture packets and physical audio still require verification. Do not select a Windows default device or silently substitute DVS.
+- Operator supplied Return Normal physical inputs 9,10,11,12 for ATEM inputs 1,2,3,4. These destinations are Videohub outputs 33,34,35,36; backup inputs are 8,6,7,5. Configuration is stored with one-based physical numbering; convert once at the wire boundary. No routes have been changed.
+- Pending operator information: independent physical observations. A Git commit/push is authorized when delivery is ready; do not mistake repository setup for publication.
+- See docs/IMPLEMENTATION.md and reports/RELEASE-STATUS.md for current milestone status. Update this file when verified facts or implementation state changes.
+- User specifically requested programming the live Companion FAIL-OVER (Fiber to Network) button. Installed custom ndi-machine module 0.1.0 into Companion 5.1.0, connection label ndi_machine, ID itpzs2-R5G6PNiUJrJsC7. Button page/row/column 1/1/1 now invokes guarded take_all and has ready/active/blocked/working feedback plus live status text. It displays BLOCKED because the production media API on localhost:9860 is not implemented. Do not remove this gate or substitute diagnostic output as readiness. The live button was NOT pressed/tested. Existing Videohub connection remains unchanged. Secret-excluded Companion export and screenshot are in ignored reports/private.
+- Companion coordinator source uses official module-base 2.1.3 (Node 26) and tools 3.1.1 (build with bundled Node 22). TypeScript compile, 12 protocol/state-machine tests, package license checks and read-only live router adapter passed. Custom module source is MIT; no proprietary media SDK code is bundled. No automatic route/return/replay. Downstream signal Unknown. Production media API integration and physical take/return remain Not Run.
+- Added WASAPI audio-host capturing the exact Dante USB Receive endpoint without changing its 48 kHz stereo mix format. A 12-second capture delivered 576480 frames, nonzero stereo levels, zero nonfinite/timestamp errors, one discontinuity (startup classification added afterward). Bounded shared audio ring, independent readers, 32-tap sinc clock adaptation and tests were added. Latest complete native build passed 3/3 tests before a small endpoint-identity enhancement; four-output USB embedding has not yet been run.
+
+## Latest verified milestone (supersedes earlier in-progress notes)
+
+- Four simultaneous 20-second outputs with shared USB capture passed: 598/598/599/598 completed frames, zero late/dropped/fallback frames, zero audio overruns/underruns/stale blocks, nonzero stereo samples on all outputs. Physical signal/audio and lip-sync remain Unknown.
+- Added persistent media-worker, versioned local named pipes, frame-boundary prepare/commit and displayed-state revisions. Missing source preparation preserved the old source through 300 additional frames; switch AUD CAM 1 to 2 and back succeeded; duplicate commit IDs returned the same operation. Native suite 3/3 passed.
+- Added .NET 8 x64 local control host/API and WebSocket full-state stream. All four workers retained instance IDs and advanced counters across a host rebuild/restart. Host-startup preroll race was fixed; final Prepare succeeded. API validation, retries, uncommissioned-plan rejection, Host/Origin protection and WebSocket resync checks passed.
+- Companion module now 0.1.2, 13 tests passed and installed in the same ndi_machine connection. Readiness includes router state/locks plus exact real worker state. Button 1/1/1 now shows BACKUP from fresh readiness and existing crosspoint readback. No live press or Videohub write was performed. Physical signal remains Unknown.
+- Four native workers, one USB capture host and the local control host are intentionally running after Prepare. Saved armed intent allows bounded recovery on subsequent host starts. GUI/Companion/control-host closure must not kill media. No Windows startup task/service installed. See docs/CONTROL-API.md for startup and maintenance shutdown.
+- WPF GUI, general audio mixing/delay/calibration controls, LAN authentication, full action/layout coverage, packaging and long/physical qualification remain unfinished. This is a working engineering milestone, not a completed production release. See reports/CONTROL-PROOF.md for exact evidence and reports/RELEASE-STATUS.md for open work.

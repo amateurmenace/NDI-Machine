@@ -1,0 +1,240 @@
+Act as a senior Windows broadcast-software engineer. Build a native Windows application provisionally called Community Signal Router, with a production-oriented NDI-to-SDI media engine, per-output audio mixing, and Stream Deck/Bitfocus Companion control, including emergency Blackmagic Videohub routing.
+
+Prioritize stability, correct timing, failure isolation, and honest hardware validation. Implement this in working milestones. Do not stop at a plan or interface mockup.
+
+## My environment and objective
+
+I work in community television. I have Blackmagic DeckLink 8K cards, a Blackmagic Videohub previously identified as a 40x40, an ATEM Television Studio HD8 ISO, and Stream Decks controlled through Bitfocus Companion.
+
+Discover the exact DeckLink and Videohub models, revisions, profiles, and capabilities. Do not assume every card is the same generation.
+
+I need a maximum of FOUR simultaneous, independent SDI output channels TOTAL, assignable across my installed DeckLink cards. Each output receives a selected full-bandwidth NDI or NDI HX3 source and embeds its own audio mix.
+
+My recent production frame rate is 29.97. Begin qualification with 1920x1080 progressive at exactly 30000/1001, but verify the actual ATEM scan mode. Do not confuse 1080p29.97 with 1080i59.94.
+
+I am still learning development. Provide complete files, exact PowerShell commands with paths, VS Code instructions, and a ZIP of the complete project. Clearly identify anything requiring hardware, credentials, an SDK download, or a license.
+
+## Required first-release capabilities
+
+- Real full-bandwidth NDI reception.
+- Real NDI HX3 reception, qualified with the intended H.264 and H.265 sources.
+- Four independently assigned DeckLink SDI outputs.
+- Independent audio mixing for every output.
+- Inputs from the selected video’s NDI audio, other NDI sources including audio-only sources, Dante Virtual Soundcard, and local Windows recording devices.
+- A native Windows GUI.
+- A custom Companion module with useful Stream Deck button presets and actual state feedback.
+- Prepared emergency plans that change Videohub routes feeding selected ATEM inputs.
+- Automatic recovery from ordinary source loss.
+- Persistent configuration, diagnostics, installer/package, and sustained hardware qualification.
+
+## Architecture
+
+Use C++20, MSVC, CMake, and the official NDI and Blackmagic Desktop Video SDKs for media processing. Use a separate C# WPF interface on a supported .NET LTS release. Use TypeScript and the current official Companion module template for the Companion integration.
+
+Introduce these boundaries incrementally:
+
+1. A supervisor/control host for configuration, command validation, health, and recovery.
+2. Up to four independent channel workers, each owning its NDI reception, media conversion, audio mixing, and DeckLink output.
+3. An external-audio capture host that opens each selected ASIO driver once and captures WASAPI endpoints. Split hosts by driver if testing requires isolation.
+4. Separate GUI and Companion clients.
+
+Closing the GUI or losing Companion must not stop healthy media outputs. Workers retain their last committed configuration during control connection loss.
+
+Use bounded queues, explicit buffer ownership, RAII, preallocated media pools, and appropriate Windows multimedia scheduling. Keep logging, UI activity, network waits, expensive conversions, and unbounded allocation out of output/audio callbacks.
+
+Distribute external audio through timestamped bounded buffers with independent readers. A slow reader must not block capture or another output.
+
+Keep full-rate media out of REST/WebSocket messages and managed GUI code.
+
+## DeckLink requirements
+
+Inventory exact models, stable device identifiers, card grouping, subdevice indices, active profiles, output capabilities, formats, and reference status where available.
+
+Persist stable identities and commissioned physical connector mappings. Do not use enumeration order or display names alone.
+
+Verify the original 8K Pro’s four-subdevice profile and its nonsequential physical connector mapping against official documentation. Confirm mappings using labeled SDI test patterns.
+
+A profile change can affect other outputs and other applications. Never change profiles automatically during routing, startup recovery, or preset recall. Require a deliberate maintenance operation.
+
+Some outputs may already be used by OBS for key/fill. Handle exclusive-access conflicts without disrupting that workflow. Prevent duplicate output assignments.
+
+Use official scheduled video/audio playback, preroll, completion callbacks, and buffer-level diagnostics. Validate mode/pixel-format combinations and handle all errors and partial audio writes. Keep scheduled buffers alive and immutable until released.
+
+Each output’s actual playback clock governs its media delivery. Do not use GUI timers, network arrival timing, or rounded sleep loops as the playout clock.
+
+## NDI video behavior
+
+Start with the standard NDI SDK and verify its documented receive capabilities using installed examples and real sources. Do not assume Advanced is required merely to receive HX3. Do not use unavailable Advanced-only APIs.
+
+Provide source discovery, search, aliases, groups, extra source IPs, and Discovery Server settings using supported SDK mechanisms.
+
+Assign persistent local source IDs. Retain source information while offline, refresh endpoints safely, and flag ambiguous replacement devices instead of silently selecting the first match.
+
+Use NDI frame synchronization paced from the output timeline. Monitor fresh media arrival independently of connection status. A repeatedly returned freeze frame or fallback slate is not evidence of a healthy source.
+
+Maintain the selected SDI format while changing sources. Prepare a candidate receiver, wait for usable media, then commit at a valid output frame boundary. Keep the current source if preparation fails unless a configured fallback policy specifies otherwise.
+
+Bound preparation time and simultaneous candidate receivers. Budget temporary additional subscriptions and decoder load during source changes.
+
+Allow one source on multiple outputs with independent audio mixes. Document and measure duplicate subscription costs.
+
+Reuse decoded frames for downscaled, rate-limited GUI previews. Preview must not add hidden full-bandwidth receivers or affect SDI operation.
+
+First qualify matching 1080p29.97 input/output. Add needed HD conversions with exact rational timing, aspect-ratio handling, explicit SDR color/range conversion, and correct row strides. Handle source format changes. Clearly reject unsupported HDR, interlaced, or UHD inputs until their conversion paths are implemented and tested.
+
+Report codec or GPU acceleration only when trustworthy metadata or diagnostics establishes it. Otherwise show Unknown.
+
+## Audio requirements
+
+Each output needs these modes:
+
+- Follow selected video’s NDI audio.
+- Fixed audio source.
+- Custom mix.
+
+Changing video must not unintentionally change fixed audio routing.
+
+Provide source/channel selection, mono/stereo mapping, gain, mute, stereo linking, meters, clipping indication, and synchronization delay. Apply short ramps to gain and routing changes. Define output headroom and clipping behavior.
+
+Use Dante Virtual Soundcard through ASIO as the primary Dante path. Subscriptions remain in Dante Controller. DVS installation/licensing is a prerequisite; do not claim native Dante networking or subscription management.
+
+Open DVS once in its capture host and fan out samples to the output mixers. Recheck actual driver readiness, sample rate, and available channels at startup and recovery.
+
+Support WASAPI recording endpoints. Optional playback-endpoint loopback must be explicitly enabled, with monitoring kept out of the capture loop.
+
+Define one normalized internal floating-point audio convention. Convert NDI levels using the documented calibration before mixing with ASIO/WASAPI PCM. Provide SMPTE, EBU, unity, and custom input calibration separately from operator faders.
+
+Initially embed a 48-kHz stereo mix on SDI channels 1–2. Keep the matrix extensible, but do not assume the ATEM can independently mix every channel DeckLink can transmit.
+
+Clock-adapt each input against its destination output. NDI frame sync handles NDI inputs; external PCM requires a tested adaptive resampler/clock controller. Fixed nominal sample-rate conversion alone is insufficient.
+
+At 30000/1001 fps, 48-kHz audio averages 1601.6 sample frames per video frame. Use continuous audio scheduling or an integer rational accumulator, never a constant rounded block count.
+
+Preserve known NDI audio/video timing. Provide measured alignment for unrelated Dante/USB sources. Implement delay as bounded buffering; compensating for late audio may require delaying video.
+
+On external-audio failure, remove only that contribution while video and other audio continue. Discard stale buffered samples after reconnect. Do not substitute Windows Default when a configured device disappears.
+
+## Companion and Stream Deck
+
+Deliver a custom module compatible with the actual Companion release used for testing. Use the matching official template and API; do not combine incompatible API generations.
+
+Expose a versioned HTTP JSON control API and WebSocket state stream. GUI and Companion must use the same validated command layer.
+
+Support localhost operation and explicit authenticated LAN control when Companion runs on another computer.
+
+Provide actions for source selection, optional prepare/take routing, route/audio presets, per-input and per-output mute, gain changes, audio mode, fallback selection, and deliberate output start/stop.
+
+Provide variables and feedback for actual source, pending source, format, fresh-media status, output health, fallback, mute/gain, active preset, connection freshness, and errors.
+
+Distinguish accepted requests from committed state. Use operation IDs, idempotent commands, state revisions, and full state resynchronization after reconnect. Do not replay stale commands.
+
+Feedback must reflect authoritative state, not the last button press. Do not label a source On Air without actual ATEM tally information.
+
+Supply working presets for a regular Stream Deck and Stream Deck XL, including concurrent use of two surfaces. Provide validated packages/layouts and precise installation instructions.
+
+## Videohub emergency switching
+
+This is mandatory in the first production release.
+
+Document and commission this wiring:
+
+- Normal SDI feeds enter Videohub inputs.
+- DeckLink backup SDI feeds enter separate Videohub inputs.
+- Fixed Videohub outputs feed the protected ATEM inputs.
+
+A source wired directly into the ATEM cannot be replaced through Videohub without the appropriate wiring.
+
+Create named emergency plans. Each protected path records:
+
+- Videohub destination feeding the ATEM input.
+- Normal Videohub source.
+- Backup Videohub source.
+- Corresponding DeckLink output/channel.
+- Intended NDI source.
+- Expected format and audio mix.
+
+Discover labels for display, but use commissioned physical port identities. Do not invent my port numbers. Four output channels provide four distinct simultaneous backup feeds.
+
+Keep designated backups running before the meeting. Provide Prepare Backups, Take Backup 1–4, Take All Configured Backups, Return Normal, and independent direct Videohub controls.
+
+Retain Companion’s existing Blackmagic Videohub module for normal routing and manual recovery.
+
+Implement the coordinated emergency state machine in our custom Companion module, preferably running on a different control computer from the media PC. It checks the media API and controls Videohub through a small documented-protocol adapter. Do not use undocumented calls into another module.
+
+Direct Videohub controls must remain usable without our media API or custom module. Provide recovery instructions for any actual physical controller available.
+
+Before taking a backup, verify fresh readiness for the exact intended source, output, format, audio configuration, and operation revision. Check current Videohub state and locks.
+
+Do not use a fixed delay or assume a sequential Companion action group provides failure gating. If readiness cannot be established, preserve the current route and explain the block. A separate deliberate manual override may select an operator-verified source.
+
+Implement Blackmagic’s TCP 9990 protocol correctly, including incremental parsing, state updates, port numbering, bounded command sequencing, and reconnect behavior.
+
+Confirm reported routing state rather than relying on ACK. After connection loss, classify outcomes as unknown until fresh state resolves them.
+
+Change only configured destinations. Preflight group operations, verify each result, and show partial completion accurately. Do not promise atomic or frame-synchronous switching.
+
+Before returning to normal, check for intervening operator changes. Restore only intended paths and verify them. Never restore the entire matrix to undo a small emergency change.
+
+Do not automatically return to normal when a source, app, or connection recovers.
+
+Show separate states for backup engine ready, Videohub route confirmed, and downstream SDI signal verified or unknown. Software health and crosspoint readback do not prove the physical SDI cable or correct signal at the ATEM.
+
+Qualify backup audio content, levels, mapping, lip-sync, and ATEM audio behavior. Avoid duplicate common mixes.
+
+Measure actual switching disturbance; do not promise hitless switching between unrelated timings. Document which failures each backup covers. A failed media PC or shared network can also make its NDI backups unavailable.
+
+## Reliability and qualification
+
+Use explicit per-output states and defined recovery transitions.
+
+During ordinary source loss, keep valid SDI running with configurable black, slate, or bounded last-frame hold. Apply the corresponding audio policy independently. Use bounded reconnect backoff.
+
+A crashed worker may interrupt its output; a card/driver/PC fault can affect multiple outputs. Do not describe restart as seamless hardware redundancy.
+
+Persist validated configuration atomically with schema versions and a last-known-good copy. Restore only to the same identified devices. Reconnect supervisors to healthy workers without creating duplicates.
+
+Qualify startup, delayed dependency readiness, RDP, logoff, and endpoint changes with the actual drivers before promising unattended operation.
+
+Expose output deadline counters separately from intentional frame-rate-conversion repeats/drops. Track audio underruns, queue depth, recovery, latency, memory, and available hardware diagnostics.
+
+Use bounded asynchronous logs. A slow client or full disk must not stall media.
+
+Implement meaningful tests for timing arithmetic, clock drift, audio calibration, channel mapping, queue bounds, stale buffers, source recovery, configuration, command retries, and Companion feedback.
+
+Physically monitor or capture all four SDI outputs and verify picture and embedded audio at the ATEM. A successful SDK call or GUI thumbnail is insufficient.
+
+Require:
+
+- Individual and simultaneous four-output tests.
+- All-full-NDI, all-HX3, and mixed-source tests.
+- Calibration tones and repeatable audio/video synchronization measurements.
+- At least a 24-hour development soak and a 72-hour release qualification.
+- No unexplained missed output deadlines or audio underruns under the declared healthy test conditions.
+- Bounded memory, handles, queues, and latency.
+- No accumulated A/V drift beyond the agreed measured tolerance.
+- Source, NIC, DVS, USB, worker, GUI, and Companion disconnect/recovery tests.
+- Output conflicts and saved assignments surviving re-enumeration.
+- Emergency take/return, unavailable backups, locked destinations, partial changes, concurrent manual routing, and connection loss before/after acknowledgment.
+- Direct Videohub recovery to surviving independent sources with the media PC unavailable.
+- Truthful signal status when a backup SDI cable is disconnected.
+
+Record the exact hardware, firmware, OS, SDK/runtime, drivers, Companion/module versions, formats, buffers, and duration. Report Passed, Failed, and Not Run separately.
+
+## Build milestones and deliverables
+
+Proceed in this order:
+
+1. Hardware/SDK inventory, physical SDI bars/tone, and real NDI/HX3 receiver proof.
+2. One complete scheduled video/audio route with switching, fallback, and diagnostics.
+3. Four independent routes across the installed cards.
+4. Dante/local audio capture, mixing, clock adaptation, and calibration.
+5. Finished GUI, API, Companion module, Stream Deck presets, and Videohub emergency plans.
+6. Installer, documentation, sustained hardware qualification, and release report.
+
+Deliver the full source repository, build/setup scripts, diagnostic CLI, GUI, real and simulated backends, API documentation, Companion module, button presets, Videohub mapping template/coordinator, tests, operator guide, installer/package, and a complete ZIP.
+
+Inspect actual SDK and dependency licenses before redistribution. Pin the tested versions and use current official documentation and installed examples.
+
+If hardware or a dependency is unavailable, identify the exact prerequisite, complete unaffected work, and mark the relevant hardware tests Not Run. Never substitute a mock or compilation result for a verified physical output.
+
+Begin by inspecting the available environment/repository, creating the implementation plan, and completing the hardware/dependency proof as far as the available equipment permits. Then continue through the remaining milestones with working code and honest validation status.

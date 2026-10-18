@@ -1,0 +1,21 @@
+# Development status
+
+This is a working engineering milestone under construction, not the finished broadcast router or a production-qualified release.
+
+**Passed:** environment discovery; upgrade to latest official DeckLink SDK 16.0; native C++20 SDK compile/link and read-only driver/device enumeration; 72-hour-equivalent integer audio timeline arithmetic, calibrated sample conversion, finite-value handling, final clipping, gain ramp, bounded concurrent queue, and stale-input recovery unit tests. These arithmetic tests are not a real-time soak. CTest passes 2/2.
+
+**Observed:** real AUD CAM 1 reception during a 12-second probe: 318 progressive 1920x1080 frames at 30000/1001 after receiver startup; zero SDK-reported video drops; zero audio packets. Codec and acceleration remain Unknown. This establishes decoded NDI video reception from that source, not separate HX3 H.264/H.265 qualification. Live Videohub read-only discovery reports Blackmagic Videohub 40x40 12G, protocol 2.8. No route changes were made.
+
+**Operator supplied:** ATEM 1080p29.97; Videohub 192.168.20.117; HX3 sources AUD CAM 1-4; intended outputs NDI Machine 1-4.
+
+**Passed at the SDK scheduling layer:** one real NDI-to-SDI output for 10 seconds, then four separate output processes for 15 seconds each. Each of the four outputs reported 448 completed frames and zero late, dropped, or fallback frames. AUD CAM 2 supplied 723 audio packets; the other three supplied none. See MEDIA-PROOF.md. This is not physical signal verification.
+
+**Operator correction:** backup audio uses Dante USB I/O Module receive channels 1/2, assigned to all four outputs, rather than DVS. Windows reports the capture endpoint active. Return Normal selects physical Videohub inputs 9/10/11/12 for ATEM 1/2/3/4 (Videohub destinations 33/34/35/36). Local configuration is saved; no route command was issued.
+
+**Added and passed:** native suite now 3/3; shared WASAPI capture of Dante USB receive 1/2; bounded atomic shared ring and independent adaptive readers; four simultaneous 20-second video/USB-audio outputs, zero late/dropped frames and audio underruns; persistent worker prepare/commit and failed-source preservation; idempotent native commit retry; reconnectable .NET control API and WebSocket state; all four workers survived control-host rebuild/restart without generation changes; API challenge, validation, retry, origin/Host restrictions and full-state stream checks; Companion module 0.1.2 built, 13 tests passed, installed and linked to real worker readiness. Existing FAIL-OVER button 1/1/1 is programmed and shows BACKUP from actual route readback. No live emergency take or Videohub route write was issued. See CONTROL-PROOF.md.
+
+**Not Run:** physical SDI bars/tone and independent picture/audio confirmation; lip-sync and calibrated ATEM audio; independently identified full-NDI and HX3 H.264/H.265 qualification; 24-hour and 72-hour real-time soaks; physical emergency take/return. Physical connector mapping still requires verification. DVS/ASIO is outside the currently commissioned USB path and remains unimplemented.
+
+**Remaining implementation:** WPF GUI; general per-output custom audio mixing, additional capture adapters, configurable audio/video delay and calibration controls; additional mode conversion and fallback choices; richer source discovery/persistence and diagnostics; authenticated LAN control; complete Companion per-output actions and dual-surface layouts; portable installer/package; crash/device/profile-change recovery qualification and sustained release tests. The current hardware path is matching 1080p29.97 and fixed USB stereo only. HTTP operations are bounded and idempotent within the current host instance; operation history is not persisted across host restarts. Do not label milestones B-F complete.
+
+**Git delivery instruction:** the user requested committing and pushing completed work to `https://github.com/amateurmenace/NDI-Machine`. The local repository is initialized on main with that origin; connected GitHub push permission is confirmed. Final publication remains part of the unfinished project delivery, with `.deps`, build products, local configuration, and private captures excluded.

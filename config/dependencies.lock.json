@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "observedOn": "2026-10-18",
+  "decklink": {
+    "sdkVersion": "16.0",
+    "releaseDate": "2026-04-08",
+    "sdkRoot": ".deps/Blackmagic DeckLink SDK 16.0",
+    "officialListing": "https://www.blackmagicdesign.com/developer/products/capture-and-playback/sdk-and-software",
+    "archive": "C:/Users/Broadcast Pix/Downloads/Blackmagic_DeckLink_SDK_16.0.zip",
+    "archiveSha256": "8CA1A5F4ED56A59F1A9731860C901690488705879A3D865204FB7F132BF00CF9",
+    "hashNote": "Locally calculated archive fingerprint, not a vendor-published checksum",
+    "downloadHostFromWindowsZoneIdentifier": "swr.cloud.blackmagicdesign.com",
+    "driverVersion": "16.3.0.0",
+    "runtimeApiVersion": "16.3",
+    "validation": "MIDL x64 + MSVC C++20 compile/link + read-only COM inventory passed",
+    "physicalOutputValidation": "Not Run",
+    "redistributeSdk": false
+  },
+  "toolchain": {
+    "visualStudio": "18.3.2",
+    "msvcTools": "14.50.35717",
+    "windowsSdk": "10.0.26100.0",
+    "cmake": "4.3.0-rc2",
+    "dotnetSdk": "8.0.301",
+    "node": "24.14.1",
+    "npm": "11.11.0"
+  },
+  "otherInstalledDependencies": {
+    "ndiSdk": "6.3.1.0",
+    "ndiRuntime": "6.3.1.0",
+    "companion": "5.1.0",
+    "danteVirtualSoundcard": "4.5.2.3"
+  },
+  "sourceDependencies": {
+    "nlohmannJson": {
+      "version": "3.12.0",
+      "sha256": "42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa",
+      "license": "MIT"
+    }
+  }
+}
