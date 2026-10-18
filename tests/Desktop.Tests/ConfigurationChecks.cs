@@ -15,11 +15,19 @@ internal static class ConfigurationChecks
                 var settings=Settings();settings[key]=value;await Reject(()=>Task.FromResult(OutputConfiguration.Validate(settings)));
             }
             var remote=Settings();remote["sourceUrl"]="192.0.2.1:5961";Require(OutputConfiguration.Validate(remote)["sourceUrl"]!.GetValue<string>()=="192.0.2.1:5961");
+            remote["sourceUrl"]="NDI-HX-SONY-PTZ-V1://192.0.2.1";Require(OutputConfiguration.Validate(remote)["sourceUrl"]!.GetValue<string>()=="NDI-HX-SONY-PTZ-V1://192.0.2.1");
         });
         await test("manual discovery validates addresses and preserves groups",async()=>{
             var result=Discovery.Validate(new(){["extraIps"]="192.0.2.1,192.0.2.1\n2001:db8::1",["groups"]="Public,Remote"});
             Require(result["extraIps"]!.GetValue<string>()=="192.0.2.1,2001:db8::1");
             await Reject(()=>Task.FromResult(Discovery.Validate(new(){["extraIps"]="192.0.2.1; & bad-command"})));
+        });
+        await test("native floating point settings compare by value across JSON number spelling",()=>{
+            var expected=Settings();var actual=new ConfigurationPipe().Snapshot();
+            actual["settings"]!["gainDb"]=JsonNode.Parse("0.0");
+            Require(OutputConfiguration.Matches(expected,actual));
+            actual["settings"]!["gainDb"]=JsonNode.Parse("-3.0");
+            Require(!OutputConfiguration.Matches(expected,actual));return Task.CompletedTask;
         });
         await test("reserved, occupied, duplicate and unavailable hardware cannot be selected",async()=>{
             var inventory=new FakeInventory();
@@ -43,6 +51,27 @@ internal static class ConfigurationChecks
         File.WriteAllText(path,"""{"schemaVersion":1,"audio":{"endpointId":"usb","policy":"fixed","backend":"wasapi","channels":[1,2],"calibration":"unity"},"outputs":[{"slot":1,"device":"0x123","source":"Camera A","audioMode":"silent"}],"videohub":{"paths":[{"slot":1,"destination":33,"normalInput":9,"backupInput":6}]}}""");
         try {
             var commission=new Commission(path,root);
+            await test("physical ATEM audio destination is preserved and invalid maps are rejected",async()=>{
+                var original=File.ReadAllText(path);var configured=JsonNode.Parse(original)!;
+                try {
+                    configured["videohub"]!["paths"]![0]!["atemInput"]=3;
+                    configured["outputs"]![0]!["audioMode"]="fixed";
+                    File.WriteAllText(path,configured.ToJsonString());var mapped=new Commission(path,root);
+                    Require(mapped.Plan["paths"]![0]!["atemInput"]!.GetValue<int>()==3);
+                    var dashboard=new DashboardModel();dashboard.SetPlan(mapped.Plan);Require(dashboard.NetworkAudioSummary.Contains("Input 3 only"));
+                    configured["videohub"]!["paths"]![0]!["atemInput"]=9;File.WriteAllText(path,configured.ToJsonString());
+                    await Reject(()=>Task.FromResult(new Commission(path,root)));
+                }finally{File.WriteAllText(path,original);}
+            });
+            await test("supervisor snapshots detach worker replies and can be sampled repeatedly",async()=>{
+                using var supervisor=new Supervisor(commission,new ConfigurationPipe(),new Inventory(commission));
+                for(var i=0;i<2;i++) {
+                    var snapshot=await supervisor.State("snapshot-"+i,default);
+                    Require(snapshot["outputs"]!.AsArray().Count==1);
+                    Require(snapshot["outputs"]![0]!["source"]!.GetValue<string>()=="Camera A");
+                    Require(snapshot["outputs"]![0]!["desiredSettings"]!["audioMode"]!.GetValue<string>()=="silent");
+                }
+            });
             await test("general output changes commit once and confirm displayed settings",async()=>{
                 var pipe=new ConfigurationPipe();var manager=new OutputManager(commission,pipe,new FakeInventory());var sent=false;
                 await manager.Apply(1,Settings("Camera B"),pipe.Expected(),true,()=>sent=true,default);

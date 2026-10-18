@@ -15,7 +15,7 @@
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" Background="#151D26" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="28,10">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.3.0" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.3.2" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid Margin="28,24"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="22" /><ColumnDefinition Width="300" /></Grid.ColumnDefinitions>
@@ -64,7 +64,7 @@
               <TextBlock Text="{Binding CompanionReason}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,6,0,0" />
               <Button Content="Open Companion  ↗" Click="OpenCompanion" Margin="0,16,0,16" />
               <TextBlock Text="Short press: overwrite routes.&#10;Hold 3 seconds + release: revert." Foreground="{StaticResource Muted}" FontSize="11" Margin="0,0,0,12" />
-              <TextBlock Text="NETWORK" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" /><TextBlock Text="ZOOM DANTE · ATEM Input 1 only" FontSize="12" Margin="0,5,0,12" />
+              <TextBlock Text="NETWORK" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" /><TextBlock Text="{Binding NetworkAudioSummary}" FontSize="12" Margin="0,5,0,12" />
               <TextBlock Text="FIBER" Foreground="#F6BD75" FontSize="11" FontWeight="Bold" /><TextBlock Text="ZOOM MADI · XLR + MADI 1/2 + 3/4" FontSize="12" Margin="0,5,0,0" />
             </StackPanel>
           </Border>

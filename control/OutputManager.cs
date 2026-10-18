@@ -22,7 +22,7 @@ public sealed class OutputManager(Commission commission, IWorkerPipe pipes, IInv
         launched[key]=Process.Start(start) ?? throw new IOException("Cannot start " + exe);
     }
     public async Task<JsonObject?> State(int slot,CancellationToken token) {
-        try { return (await pipes.State(slot,token))["state"]!.AsObject(); }
+        try { return (JsonObject)(await pipes.State(slot,token))["state"]!.DeepClone(); }
         catch(Exception) when(!token.IsCancellationRequested) { return null; }
     }
     private async Task Audio(JsonObject settings,CancellationToken token) {

@@ -70,7 +70,8 @@ public sealed class OutputModel(int slot) : Observable
     public string Completed => Fresh ? NumberAt(State?["counters"] as JsonObject, "completed").ToString("N0") : "—";
     public string Deadlines => Fresh ? $"{NumberAt(State?["counters"] as JsonObject, "late")} late / {NumberAt(State?["counters"] as JsonObject, "dropped")} dropped" : "—";
     public string OtherCounters => $"Fallback {NumberAt(State?["counters"] as JsonObject, "fallback"):N0}  ·  Input repeats {NumberAt(State?["counters"] as JsonObject, "inputRepeats"):N0}";
-    public string Mapping => Path == null ? "Mapping unavailable" : $"Fiber {NumberAt(Path, "normalInput")}   /   Network {NumberAt(Path, "backupInput")}   →   Out {NumberAt(Path, "destination")}";
+    public string Mapping => Path == null ? "Mapping unavailable" : $"Fiber {NumberAt(Path, "normalInput")}   /   Network {NumberAt(Path, "backupInput")}   →   Out {NumberAt(Path, "destination")}" +
+        (Path["atemInput"] is JsonNode input ? $"   →   ATEM {input}" : "");
     public string Detail => !Fresh ? "Last source shown. Commands disabled until fresh state returns." : Text(State, "error", Source != ExpectedSource ? "Custom source · restore the backup plan before emergency use." : "Edit output for device, audio and receiver controls.");
     public bool CanApply => CanRoute && Fresh && SelectedSource.Trim().Length > 0 && SelectedSource != Source && State?["running"]?.GetValue<bool>() == true;
     public void Update(JsonObject? state, JsonObject? path, bool fresh, bool canRoute)
@@ -96,6 +97,12 @@ public sealed class DashboardModel : Observable
     public ObservableCollection<string> Events { get; } = new();
     public JsonObject? State { get; private set; }
     public JsonObject? Plan { get; private set; }
+    public string NetworkAudioSummary {
+        get {
+            var paths=(Plan?["paths"] as JsonArray)?.OfType<JsonObject>().Where(p=>OutputModel.Text(p,"audioMode")=="fixed").ToArray();
+            return paths?.Length==1 && paths[0]["atemInput"] is JsonNode input ? $"ZOOM DANTE · ATEM Input {input} only" : "ZOOM DANTE · audio destination needs commissioning";
+        }
+    }
     private long received;
     public bool Connected { get; private set; }
     public bool Busy { get; private set; }

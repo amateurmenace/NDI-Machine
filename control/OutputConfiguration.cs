@@ -26,10 +26,12 @@ public static class OutputConfiguration
         if (Text("bandwidth") is not ("highest" or "lowest") || Text("sizing") is not ("fit" or "fill" or "stretch") ||
             Text("audioMode") is not ("fixed" or "ndi" or "silent")) throw new InvalidDataException("Invalid receiver or audio mode");
         var url = Text("sourceUrl");
-        // An NDI transport endpoint is an address[:port], never an HTTP URL or a file.
-        if (url.Length != 0 && (!Uri.TryCreate("ndi://" + url, UriKind.Absolute, out var address) ||
+        // The SDK finder also returns vendor HX transport identifiers. Preserve
+        // those exact addresses; they are not HTTP URLs or file paths.
+        var transport=Regex.IsMatch(url,"^ndi-hx-[a-z0-9-]+://",RegexOptions.IgnoreCase) ? url : "ndi://"+url;
+        if (url.Length != 0 && (url.Length>512 || !Uri.TryCreate(transport, UriKind.Absolute, out var address) ||
             !IPAddress.TryParse(address.Host.Trim('[', ']'), out _) || address.UserInfo.Length != 0 || address.AbsolutePath != "/" ||
-            address.Query.Length != 0 || address.Fragment.Length != 0)) throw new InvalidDataException("NDI source address must be an IP address with optional port");
+            address.Query.Length != 0 || address.Fragment.Length != 0)) throw new InvalidDataException("Use an IP:port or a discovered NDI HX transport address");
         if (endpoint.Length > 500 || endpoint.Any(char.IsControl) || (Text("audioMode") == "fixed" && endpoint.Length == 0))
             throw new InvalidDataException("Select an explicit Windows audio endpoint");
         var left = result["left"]?.GetValue<int>() ?? 0; var right = result["right"]?.GetValue<int>() ?? 0;
@@ -43,5 +45,7 @@ public static class OutputConfiguration
     }
     public static bool Matches(JsonObject settings, JsonObject state) =>
         state["deviceId"]?.GetValue<string>().ToLowerInvariant() == settings["device"]?.GetValue<string>() &&
-        state["settings"] is JsonObject actual && settings.Where(pair => pair.Key != "device").All(pair => JsonNode.DeepEquals(pair.Value, actual[pair.Key]));
+        state["settings"] is JsonObject actual && settings.Where(pair => pair.Key != "device").All(pair =>
+            pair.Key == "gainDb" ? actual[pair.Key] != null && pair.Value!.GetValue<double>() == actual[pair.Key]!.GetValue<double>() :
+            JsonNode.DeepEquals(pair.Value, actual[pair.Key]));
 }

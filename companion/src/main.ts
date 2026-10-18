@@ -2,8 +2,9 @@ import { InstanceBase, InstanceStatus, type SomeCompanionConfigField } from '@co
 import { Coordinator, HttpMedia, readiness, routeMode, toggleReadiness, validatePlan, type Plan, type RouteMode } from './coordinator.js'
 import { Videohub } from './videohub.js'
 import { performance } from 'node:perf_hooks'
-import { AtemAudio, CompanionZoom, EmergencyAudio } from './audio.js'
+import { AtemAudio, CompanionZoom, EmergencyAudio, networkAudioInput } from './audio.js'
 import { HoldGesture } from './hold.js'
+import { LocalLauncher, primeOnly } from './prime.js'
 
 type Config = {host: string; apiUrl: string; plan: string; atemHost: string; companionUrl: string; zoomNetwork: string; zoomFiber: string}
 type Empty = Record<string, never>
@@ -12,7 +13,7 @@ type Schema = {
   actions: {toggle: {options: Empty}; toggle_down: {options: Empty}; toggle_up: {options: Empty}; undo: {options: Empty}; take_all: {options: Empty}; return_normal: {options: Empty}; prepare: {options: Empty}; check: {options: Empty}};
   feedbacks: {blocked: {type: 'boolean'; options: Empty}; ready: {type: 'boolean'; options: Empty};
     active: {type: 'boolean'; options: Empty}; working: {type: 'boolean'; options: Empty}};
-  variables: {status: string; reason: string; engine_ready: string; routes: string; signal: string; operation: string; route_mode: string; next_action: string; audio_profile: string; undo_available: string}
+  variables: {status: string; reason: string; engine_ready: string; routes: string; signal: string; operation: string; route_mode: string; next_action: string; audio_profile: string; undo_available: string; button_text:string; network_audio_input:string}
 }
 export const UpgradeScripts = []
 export default class ModuleInstance extends InstanceBase<Schema> {
@@ -35,6 +36,9 @@ export default class ModuleInstance extends InstanceBase<Schema> {
   private outcomeReason = ''
   private operation = ''
   private gesture = new HoldGesture()
+  private launcher=new LocalLauncher()
+  private needsPrime=true
+  private priming=false
   async init(config: Config): Promise<void> {
     this.setVariableDefinitions({
       status: {name: 'Emergency state'}, reason: {name: 'Readiness block or last result'},
@@ -43,11 +47,13 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       route_mode: {name: 'Actual route group: FIBER, NETWORK, MIXED or UNKNOWN'}, next_action: {name: 'Next guarded toggle action'},
       audio_profile: {name: 'Observed ATEM input audio profile (Zoom dispatch is separate)'},
       undo_available: {name: 'Hold three seconds and release to restore previous change'},
+      button_text: {name:'Failover label including click-to-prime state'},
+      network_audio_input: {name:'ATEM input receiving the commissioned audio-bearing NDI output'},
     })
     this.setActionDefinitions({
       toggle: {name: 'FAIL-OVER TOGGLE: Fiber / Network (verified routes)', options: [], callback: async () => this.execute('toggle')},
       toggle_down: {name: 'FAIL-OVER: Button down (start hold)', options: [], callback: event => {
-        if (!this.performing) this.gesture.down(`${event.controlId}/${event.surfaceId ?? 'remote'}`)
+        if (!this.performing) this.gesture.down(`${event.controlId}/${event.surfaceId ?? 'remote'}`,this.needsPrime)
         this.publish()
       }},
       toggle_up: {name: 'FAIL-OVER: Button up (short = toggle, hold 3s = undo)', options: [], callback: async event => {
@@ -67,13 +73,13 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       check: {name: 'Check readiness and routes (read only)', options: [], callback: async () => { await this.refresh() }},
     })
     this.setFeedbackDefinitions({
-      blocked: {name: 'Emergency blocked or state stale', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x7d1010, color: 0xffffff}, callback: () => !this.fresh() || !this.ready || this.unresolved()},
+      blocked: {name: 'Emergency blocked or state stale', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x7d1010, color: 0xffffff}, callback: () => !this.needsPrime && (!this.fresh() || !this.ready || this.unresolved())},
       ready: {name: 'Network take ready (overwrites current routes)', type: 'boolean', options: [], defaultStyle: {bgcolor: 0xc27a00, color: 0xffffff}, callback: () => this.fresh() && this.ready && this.routeMode !== 'NETWORK'},
       active: {name: 'Network routes confirmed; return to fiber available (signal Unknown)', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x176434, color: 0xffffff}, callback: () => this.fresh() && this.ready && this.routesConfirmed && !this.unresolved()},
-      working: {name: 'Emergency operation in progress', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x234b88, color: 0xffffff}, callback: () => this.performing},
+      working: {name: 'Priming needed or operation in progress', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x234b88, color: 0xffffff}, callback: () => this.performing || this.needsPrime},
     })
     this.setPresetDefinitions([{id: 'emergency', name: 'Emergency routing', definitions: ['take', 'prepare', 'return', 'check']}], {
-      take: {type: 'simple', name: 'FAIL-OVER TOGGLE (Fiber / Network)', style: {text: 'FAIL-OVER\n$(self:status)\n$(self:next_action)', size: 'auto', color: 0xffffff, bgcolor: 0x7d1010},
+      take: {type: 'simple', name: 'FAIL-OVER TOGGLE (Fiber / Network)', style: {text: '$(self:button_text)', size: 'auto', color: 0xffffff, bgcolor: 0x7d1010},
         steps: [{down: [{actionId: 'toggle_down', options: {}}], up: [{actionId: 'toggle_up', options: {}}]}],
         feedbacks: [{feedbackId: 'ready', options: {}, style: {bgcolor: 0xc27a00}}, {feedbackId: 'active', options: {}, style: {bgcolor: 0x176434}}, {feedbackId: 'blocked', options: {}, style: {bgcolor: 0x7d1010}}, {feedbackId: 'working', options: {}, style: {bgcolor: 0x234b88}}]},
       prepare: {type: 'simple', name: 'Prepare Backups', style: {text: 'PREPARE\nBACKUPS', size: 'auto', color: 0xffffff, bgcolor: 0x234b88}, steps: [{down: [{actionId: 'prepare', options: {}}], up: []}], feedbacks: []},
@@ -92,20 +98,24 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       {type: 'textinput', id: 'zoomNetwork', label: 'ZOOM DANTE button (page/row/column)', width: 6, default: '1/1/2'},
       {type: 'textinput', id: 'zoomFiber', label: 'ZOOM MADI button (page/row/column)', width: 6, default: '1/1/1'},
       {type: 'static-text', id: 'info', label: 'Operation', width: 12,
-        value: 'After confirmed video routes: Network presses ZOOM DANTE and enables only ATEM Input 1. Fiber presses ZOOM MADI and enables only XLR + MADI 1/2 + 3/4. All other input audio is Off. ATEM, x32 and zoomswitch must be reachable. Master/gains remain unchanged. Never routes or switches audio automatically. SDI signal remains Unknown.'},
+        value: 'After confirmed video routes: Network presses ZOOM DANTE and enables the atemInput of the single fixed-audio path in the commissioned plan. Verify the physical SDI/Videohub/ATEM map. Other paths must be silent. Fiber presses ZOOM MADI and enables only XLR + MADI 1/2 + 3/4. ATEM, x32 and zoomswitch must be reachable. Master/gains remain unchanged. No automatic routing or audio changes.'},
     ]
   }
   async configUpdated(config: Config): Promise<void> {
     await this.destroy()
     this.ready = false; this.engineReady = false; this.routesConfirmed = false; this.observedAt = 0; this.operation = ''; this.lastResult = ''; this.outcomeReason = ''
     this.routeMode = 'UNKNOWN'
+    this.needsPrime=true
+    this.setVariableValues({network_audio_input:'UNCOMMISSIONED'})
     try {
       if (!config.host?.trim()) throw new Error('Videohub address is required')
       this.plan = validatePlan(JSON.parse(config.plan))
+      const networkInput=networkAudioInput(this.plan)
       this.media = new HttpMedia(config.apiUrl)
       const zoom = new CompanionZoom(config.companionUrl || 'http://127.0.0.1:8000', config.zoomNetwork || '1/1/2', config.zoomFiber || '1/1/1')
       this.atemAudio = new AtemAudio(config.atemHost, message => this.log('warn', message))
-      this.audio = new EmergencyAudio(this.atemAudio, zoom)
+      this.audio = new EmergencyAudio(this.atemAudio, zoom,networkInput)
+      this.setVariableValues({network_audio_input:String(networkInput)})
       this.hub = new Videohub(config.host.trim())
       this.coordinator = new Coordinator(this.plan, this.hub, this.media, this.audio)
       this.reason = 'Awaiting fresh media and router state'
@@ -126,9 +136,10 @@ export default class ModuleInstance extends InstanceBase<Schema> {
   private unresolved(): boolean { return ['PARTIAL', 'UNKNOWN'].includes(this.lastResult) }
   private publish(): void {
     const fresh = this.fresh()
-    const status = this.performing ? 'WORKING' : !fresh ? 'BLOCKED' : this.unresolved() ? this.lastResult : this.routeMode === 'MIXED' ? 'MIXED' : !this.ready ? 'BLOCKED' : this.routeMode
-    const next = this.performing ? 'PLEASE WAIT' : this.gesture.hint || (!fresh || !this.ready ? 'BLOCKED' : this.routeMode === 'NETWORK' ? 'RETURN FIBER' : 'TAKE NETWORK')
+    const status = this.priming ? 'PRIMING' : this.performing ? 'WORKING' : this.needsPrime ? 'PRIME' : !fresh ? 'BLOCKED' : this.unresolved() ? this.lastResult : this.routeMode === 'MIXED' ? 'MIXED' : !this.ready ? 'BLOCKED' : this.routeMode
+    const next = this.performing ? 'PLEASE WAIT' : this.gesture.hint || (this.needsPrime ? 'CLICK TO PRIME' : !fresh || !this.ready ? 'BLOCKED' : this.routeMode === 'NETWORK' ? 'RETURN FIBER' : 'TAKE NETWORK')
     this.setVariableValues({status, reason: (this.unresolved() ? `${this.outcomeReason}; current: ${this.reason}` : this.reason).slice(0, 500), engine_ready: fresh && this.engineReady ? 'READY' : 'NOT READY',
+      button_text:this.priming ? 'PRIMING\nFAIL-OVER\nPLEASE WAIT' : this.needsPrime && !this.performing ? 'CLICK TO\nPRIME\nFAIL-OVER' : `${status}\nFAIL-OVER\n${next}`,
       routes: fresh && ['FIBER', 'NETWORK'].includes(this.routeMode) ? `${this.routeMode} ROUTES CONFIRMED` : 'NOT CONFIRMED',
       signal: 'UNKNOWN', operation: this.operation, route_mode: fresh ? this.routeMode : 'UNKNOWN', next_action: next, audio_profile: this.audio?.profile() ?? 'UNKNOWN', undo_available: this.coordinator?.canUndo ? 'HOLD 3s + RELEASE' : 'NO PREVIOUS CHANGE'})
     this.checkFeedbacks('blocked', 'ready', 'active', 'working')
@@ -137,7 +148,8 @@ export default class ModuleInstance extends InstanceBase<Schema> {
     if (this.performing || this.pollTask || !this.plan || !this.hub || !this.media) { this.publish(); return this.pollTask ?? Promise.resolve() }
     this.pollTask = (async () => {
       try {
-        const [hub, media] = await Promise.allSettled([this.hub!.snapshot(), this.media!.state()])
+        const [hub, media, launcher] = await Promise.allSettled([this.hub!.snapshot(), this.media!.state(),this.launcher.state()])
+        this.needsPrime=launcher.status!=='fulfilled' || !launcher.value.desktopRunning || !launcher.value.controlRunning || media.status!=='fulfilled'
         this.engineReady = media.status === 'fulfilled' && !readiness(this.plan!, media.value)
         const engineReason = media.status === 'rejected' ? 'Media control API unavailable; cannot take network backups' : readiness(this.plan!, media.value)
         this.routeMode = hub.status === 'fulfilled' ? routeMode(this.plan!, hub.value) : 'UNKNOWN'
@@ -149,6 +161,7 @@ export default class ModuleInstance extends InstanceBase<Schema> {
         this.ready = !block
         this.routesConfirmed = this.routeMode === 'NETWORK'
         this.reason = block ?? (this.routesConfirmed ? `Network routes confirmed; short press returns to fiber${engineReason ? '; backup engines not ready' : ''}; physical signal Unknown` : 'Short press overwrites protected routes with network backups; physical signal Unknown')
+        if(this.needsPrime)this.reason=launcher.status==='rejected' ? 'Click to prime; local launcher unavailable. Start NDI Machine Launcher if this persists.' : 'Click to prime: open NDI Machine, connect and prepare backups. This click does not change routes or ATEM/Zoom audio.'
         this.observedAt = performance.now()
         this.updateStatus(this.ready && hub.status === 'fulfilled' ? InstanceStatus.Ok : InstanceStatus.UnknownWarning, this.reason)
       } catch (error) { this.ready = false; this.engineReady = false; this.routesConfirmed = false; this.routeMode = 'UNKNOWN'; this.reason = String(error); this.observedAt = 0 }
@@ -156,14 +169,39 @@ export default class ModuleInstance extends InstanceBase<Schema> {
     })().finally(() => { this.pollTask = undefined })
     return this.pollTask
   }
-  private async execute(command: 'take' | 'return' | 'toggle' | 'undo'): Promise<void> {
+  private async execute(command: 'take' | 'return' | 'toggle' | 'undo' | 'prime'): Promise<void> {
     if (this.performing || !this.coordinator) return
+    if(command==='prime' || command==='toggle' && this.needsPrime){await this.prime();return}
     this.performing = true; this.lastResult = ''; this.outcomeReason = ''; this.publish()
     try {
       await this.pollTask
+      if(command==='toggle') {
+        let connected=false
+        try{const launch=await this.launcher.state();connected=launch.desktopRunning && launch.controlRunning}catch{}
+        if(!connected){await this.prime();return}
+      }
       const result = command === 'undo' ? await this.coordinator.undo() : command === 'toggle' ? await this.coordinator.toggle() : await this.coordinator.take(command === 'return')
       this.operation = result.id; this.reason = result.reason; this.outcomeReason = result.reason; this.lastResult = result.state.toUpperCase()
       this.log(result.state === 'confirmed' ? 'info' : 'warn', `${command} to ${result.target ?? 'undetermined'} ${result.state}: ${result.reason}; confirmed slots ${result.confirmed.join(',') || 'none'}`)
     } finally { this.performing = false; this.publish(); await this.refresh() }
+  }
+  private async prime():Promise<void> {
+    if(!this.media || !this.plan)return
+    this.performing=true;this.priming=true;this.lastResult='';this.outcomeReason='';this.publish()
+    try {
+      await this.pollTask
+      this.operation=await primeOnly(this.launcher,this.media,this.plan)
+      let confirmed=false
+      for(let attempt=0;attempt<400;attempt++) {
+        const operation=await this.media.operation(this.operation)
+        if(operation.state==='committed'){confirmed=true;break}
+        if(['failed','unknown'].includes(operation.state))throw new Error(operation.error ?? operation.state)
+        await new Promise(resolve=>setTimeout(resolve,500))
+      }
+      if(!confirmed)throw new Error('Preparation confirmation timed out; no routing or automatic replay')
+      this.reason='App connected and backups prepared. Press again for the displayed Fiber/Network action.'
+      this.log('info',this.reason)
+    }catch(error){this.lastResult='UNKNOWN';this.outcomeReason=`Prime failed: ${String(error)}`;this.log('warn',this.outcomeReason)}
+    finally{this.priming=false;this.performing=false;await this.refresh()}
   }
 }

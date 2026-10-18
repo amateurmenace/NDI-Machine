@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { audioPlan, CompanionZoom, EmergencyAudio, OFF, ON, type AudioMixer, type AudioSnapshot, type AudioTarget, type ZoomButtons } from '../audio.js'
+import { audioPlan, CompanionZoom, EmergencyAudio, networkAudioInput, OFF, ON, type AudioMixer, type AudioSnapshot, type AudioTarget, type ZoomButtons } from '../audio.js'
+import { validatePlan, type Plan } from '../coordinator.js'
 
 function snapshot(): AudioSnapshot {
   const inputs = [
@@ -28,6 +29,25 @@ class Buttons implements ZoomButtons {
   async press(target: AudioTarget): Promise<void> { this.presses.push(target) }
   async selected(): Promise<AudioTarget> { return this.presses.at(-1) ?? 'FIBER' }
 }
+test('network audio follows the mapped audio-bearing output, including ATEM Input 3, and undo remains exact',async()=>{
+  const plan:Plan={schemaVersion:1,name:'mapped',audioEndpointId:'usb',paths:[
+    {slot:1,device:'0x1',source:'Camera A',destination:35,normalInput:11,backupInput:8,audioMode:'fixed',atemInput:3},
+    {slot:2,device:'0x2',source:'Camera B',destination:33,normalInput:9,backupInput:6,audioMode:'silent',atemInput:1},
+  ]}
+  const input=networkAudioInput(validatePlan(plan));assert.equal(input,3)
+  const mixer=new Mixer();const buttons=new Buttons();const audio=new EmergencyAudio(mixer,buttons,input)
+  const before=mixer.snapshot();const undo=await audio.captureUndo()
+  await (await audio.prepare('NETWORK'))()
+  assert.deepEqual(mixer.state.sources.filter(s=>s.mix===ON).map(s=>s.input),[3]);assert.equal(audio.profile(),'NETWORK')
+  await (await audio.prepare('FIBER'))()
+  assert.deepEqual(mixer.state.sources.filter(s=>s.mix===ON).map(s=>s.input),[1001,1501,1502])
+  await (await undo())();assert.deepEqual(mixer.state.sources,before.sources)
+  for(const mutate of [
+    (p:Plan)=>{delete p.paths[0].atemInput},(p:Plan)=>{p.paths[0].atemInput=9},
+    (p:Plan)=>{p.paths[1].audioMode='fixed'},(p:Plan)=>{p.paths[0].audioMode='silent'},
+    (p:Plan)=>{delete p.paths[1].audioMode},(p:Plan)=>{p.paths[1].atemInput=3},
+  ]){const bad=structuredClone(plan);mutate(bad);assert.throws(()=>networkAudioInput(validatePlan(bad)))}
+})
 test('network enables only Input 1; fiber only XLR and MADI 1/2 + 3/4 across all 29 inputs', () => {
   const state = snapshot()
   assert.equal(state.sources.length, 29)

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -20,8 +21,11 @@ internal static class Program
         if(args.Length==3) {
             using var client=new EngineClient();var actual=client.State().GetAwaiter().GetResult();
             var output=new OutputModel(1);output.Update(actual["outputs"]!.AsArray().OfType<JsonObject>().Single(o=>o["slot"]!.GetValue<int>()==1),null,true,true);
-            window=new OutputEditor(output,JsonNode.Parse(File.ReadAllText(args[2]))!.AsObject(),[new SourceChoice(output.Source,"")]);
+            var discovery=client.Request(HttpMethod.Get,"sources",milliseconds:15000).GetAwaiter().GetResult();
+            var sources=discovery["sources"]!.AsArray().OfType<JsonObject>().Select(s=>new SourceChoice(s["name"]!.GetValue<string>(),s["endpoint"]!.GetValue<string>())).OrderBy(s=>s.Name).ToArray();
+            window=new OutputEditor(output,JsonNode.Parse(File.ReadAllText(args[2]))!.AsObject(),sources);
         }else window = new MainWindow(args[0]);
+        window.ShowActivated=false;window.ShowInTaskbar=false;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         timer.Tick += (_, _) =>
         {

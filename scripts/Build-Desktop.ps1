@@ -1,9 +1,9 @@
-param([switch]$IncludeLocalConfiguration, [string]$NativeBuildDirectory='build\Release')
+param([switch]$IncludeLocalConfiguration, [string]$NativeBuildDirectory='build\Release', [string]$OutputDirectory='dist\NDI Machine')
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $dotnet='C:\Program Files\dotnet\dotnet.exe'
 $runtime='8.0.32'
-$package=Join-Path $root 'dist\NDI Machine'
+$package=[IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
 if(!$IncludeLocalConfiguration -and (Get-ChildItem -LiteralPath (Join-Path $package 'config') -Filter 'local.*' -ErrorAction SilentlyContinue)) {
   throw 'Existing package contains private local configuration. Use a fresh checkout/output directory for a public package, or explicitly request -IncludeLocalConfiguration.'
 }
@@ -18,6 +18,8 @@ try {
   if($LASTEXITCODE){throw 'Desktop publish failed'}
   & $dotnet publish control\NDIMachine.Control.csproj @publish ('-p:OutputPath='+$root+'\build\control-package\') -o (Join-Path $package 'engine')
   if($LASTEXITCODE){throw 'Control host publish failed'}
+  & $dotnet publish launcher\NDIMachine.Launcher.csproj @publish ('-p:OutputPath='+$root+'\build\launcher-package\') -o (Join-Path $package 'launcher')
+  if($LASTEXITCODE){throw 'Launcher publish failed'}
   $native=Join-Path $package 'build\Release'
   New-Item -ItemType Directory -Force -Path $native,(Join-Path $package 'config'),(Join-Path $package 'notices') | Out-Null
   foreach($name in @('audio-host.exe','media-worker.exe','ndi-probe.exe','decklink-sdk-check.exe')) {

@@ -11,11 +11,15 @@ public partial class OutputEditor : Window
     public JsonObject? Settings {get;private set;}
     private readonly string previousDevice;
     private bool loading=true;
-    public OutputEditor(OutputModel output,JsonObject inventory,IEnumerable<SourceChoice> sources) {
+    private readonly Func<Task<SourceChoice[]>>? refreshSources;
+    public OutputEditor(OutputModel output,JsonObject inventory,IEnumerable<SourceChoice> sources,Func<Task<SourceChoice[]>>? refreshSources=null) {
+        this.refreshSources=refreshSources;
         InitializeComponent();Heading.Text=$"Output {output.Slot} settings";
         var current=output.State?["settings"] as JsonObject ?? output.State?["desiredSettings"] as JsonObject ?? new JsonObject();
         var configuredDevice=OutputModel.Text(current,"device",output.Device);previousDevice=output.Device;
         Source.ItemsSource=sources.ToArray(); Source.Text=OutputModel.Text(current,"source",output.Source);
+        SourceCount.Text=$"{Source.Items.Count} sources available · type a name or choose from network discovery";
+        RefreshSourceButton.IsEnabled=refreshSources!=null;
         SourceAddress.Text=OutputModel.Text(current,"sourceUrl");
         Bandwidth.SelectedValue=OutputModel.Text(current,"bandwidth","highest");Sizing.SelectedValue=OutputModel.Text(current,"sizing","fit");
         Device.ItemsSource=(inventory["decklink"]?["devices"] as JsonArray ?? new()).OfType<JsonObject>().Select(d=> {
@@ -32,6 +36,18 @@ public partial class OutputEditor : Window
         Gain.Text=(current["gainDb"]?.GetValue<double>() ?? 0).ToString(CultureInfo.InvariantCulture);
         Delay.Text=(current["delayMs"]?.GetValue<int>() ?? 0).ToString();Muted.IsChecked=current["muted"]?.GetValue<bool>()==true;
         loading=false;AudioChanged(this,new RoutedEventArgs());
+    }
+    private async void RefreshSourceList(object sender,RoutedEventArgs e) {
+        if(refreshSources==null)return;
+        RefreshSourceButton.IsEnabled=false;SourceCount.Text="Discovering network sources…";
+        var selected=Source.Text;var address=SourceAddress.Text;
+        try {
+            var sources=await refreshSources();loading=true;
+            Source.ItemsSource=sources.Any(s=>s.Name==selected) ? sources : sources.Append(new SourceChoice(selected,address)).ToArray();
+            Source.Text=selected;SourceAddress.Text=address;
+            SourceCount.Text=$"{sources.Length} network sources found · current selection preserved";
+        }catch(Exception error){SourceCount.Text="Discovery failed: "+error.Message;}
+        finally{loading=false;RefreshSourceButton.IsEnabled=true;}
     }
     private void SourceChanged(object sender,SelectionChangedEventArgs e) {
         if(!loading && Source.SelectedItem is SourceChoice source)SourceAddress.Text=source.Address;

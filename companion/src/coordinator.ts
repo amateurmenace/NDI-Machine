@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { HubSnapshot, Router } from './videohub.js'
 
-export type Path = {slot: number; destination: number; normalInput: number; backupInput: number; device: string; source: string; audioMode?: 'fixed' | 'silent'}
+export type Path = {slot: number; destination: number; normalInput: number; backupInput: number; device: string; source: string; audioMode?: 'fixed' | 'silent'; atemInput?:number}
 export type Plan = {schemaVersion: 1; name: string; audioEndpointId: string; paths: Path[]}
 export type ReadyOutput = {
   slot: number; deviceId: string; source: string; backend: string; running: boolean;
@@ -23,8 +23,11 @@ export function validatePlan(raw: unknown): Plan {
     if (!Number.isSafeInteger(path.slot) || path.slot < 1 || path.slot > 4 ||
         !/^0x[0-9a-f]+$/i.test(path.device) || typeof path.source !== 'string' || !path.source ||
         [path.destination, path.normalInput, path.backupInput].some(port => !Number.isSafeInteger(port) || port < 1 || port > 4096) ||
-        path.normalInput === path.backupInput || (path.audioMode !== undefined && !['fixed', 'silent'].includes(path.audioMode))) throw new Error('Invalid commissioned path')
+        path.normalInput === path.backupInput || (path.audioMode !== undefined && !['fixed', 'silent'].includes(path.audioMode)) ||
+        (path.atemInput!==undefined && (!Number.isSafeInteger(path.atemInput) || path.atemInput<1 || path.atemInput>8))) throw new Error('Invalid commissioned path')
   }
+  const atemInputs=plan.paths.filter(p=>p.atemInput!==undefined).map(p=>p.atemInput)
+  if(new Set(atemInputs).size!==atemInputs.length)throw new Error('Duplicate ATEM input')
   if (new Set(plan.paths.map(path => path.device.toLowerCase())).size !== plan.paths.length) throw new Error('Duplicate device')
   return structuredClone(plan)
 }
@@ -104,6 +107,11 @@ export class HttpMedia implements Media {
     const result = await response.json() as {operationId?: string}
     if (!result.operationId) throw new Error('Prepare response lacks operation ID')
     return result.operationId
+  }
+  async operation(id:string):Promise<{state:string;error?:string}> {
+    const response=await fetch(new URL(`/api/v1/operations/${encodeURIComponent(id)}`,this.base),{signal:AbortSignal.timeout(1500),cache:'no-store'})
+    if(!response.ok)throw new Error('Preparation outcome unavailable; no replay')
+    return await response.json() as {state:string;error?:string}
   }
 }
 export type Outcome = {id: string; state: 'confirmed' | 'blocked' | 'partial' | 'unknown'; confirmed: number[]; reason: string; target?: 'FIBER' | 'NETWORK'}

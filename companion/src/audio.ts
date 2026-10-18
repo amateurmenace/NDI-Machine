@@ -1,6 +1,6 @@
 import { Atem, Enums } from 'atem-connection'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { TransitionAudio } from './coordinator.js'
+import type { Plan, TransitionAudio } from './coordinator.js'
 
 export type AudioTarget = 'FIBER' | 'NETWORK'
 export type AudioSource = {input: number; source: string; port: number; mix: number; supported: number[]}
@@ -9,11 +9,20 @@ export interface AudioMixer { snapshot(): AudioSnapshot; setMix(input: number, s
 export interface ZoomButtons { check(): Promise<void>; press(target: AudioTarget): Promise<void>; selected?(): Promise<AudioTarget> }
 export const OFF = Enums.FairlightAudioMixOption.Off
 export const ON = Enums.FairlightAudioMixOption.On
-const enabled = {NETWORK: new Set([1]), FIBER: new Set([1001, 1501, 1502])}
+const fiberEnabled = new Set([1001, 1501, 1502])
 const key = (s: AudioSource): string => `${s.input}/${s.source}`
 const topology = (s: AudioSnapshot): string => JSON.stringify(s.sources.map(x => [x.input, x.source, x.port, x.supported]).sort())
 
-export function audioPlan(snapshot: AudioSnapshot, target: AudioTarget): AudioSource[] {
+export function networkAudioInput(plan:Plan):number {
+  const carrying=plan.paths.filter(p=>p.audioMode==='fixed')
+  if(carrying.length!==1 || plan.paths.some(p=>!['fixed','silent'].includes(p.audioMode ?? '')))
+    throw new Error('Commission exactly one audio-bearing backup path; all other paths must be silent')
+  const input=carrying[0].atemInput
+  if(!Number.isSafeInteger(input) || input!<1 || input!>8)throw new Error('Commission the physical ATEM input for the audio-bearing backup path')
+  return input!
+}
+export function audioPlan(snapshot: AudioSnapshot, target: AudioTarget, networkInput=1): AudioSource[] {
+  if(!Number.isSafeInteger(networkInput) || networkInput<1 || networkInput>8)throw new Error('Invalid commissioned network audio input')
   if (!snapshot.connected) throw new Error('ATEM audio connection unavailable')
   if (snapshot.model !== 27) throw new Error('ATEM is not the commissioned Television Studio HD8 ISO')
   // Check port identities as well as numeric input IDs. Never treat an arbitrary
@@ -26,7 +35,7 @@ export function audioPlan(snapshot: AudioSnapshot, target: AudioTarget): AudioSo
     if (!snapshot.sources.some(s => s.input === input && s.port === port)) throw new Error(`ATEM audio input ${input} missing or wrong port type`)
   if (new Set(snapshot.sources.map(key)).size !== snapshot.sources.length) throw new Error('Duplicate ATEM audio source')
   return snapshot.sources.map(source => {
-    const mix = enabled[target].has(source.input) ? ON : OFF
+    const mix = (target==='NETWORK' ? source.input===networkInput : fiberEnabled.has(source.input)) ? ON : OFF
     if (!source.supported.includes(mix) || !Number.isFinite(source.mix)) throw new Error(`ATEM audio ${key(source)} cannot apply ${target}`)
     return {...source, mix}
   })
@@ -40,24 +49,24 @@ function unchanged(initial: AudioSnapshot, current: AudioSnapshot, expected: Map
 }
 
 export class EmergencyAudio implements TransitionAudio {
-  constructor(private mixer: AudioMixer, private zoom: ZoomButtons) {}
+  constructor(private mixer: AudioMixer, private zoom: ZoomButtons, private networkInput=1) {}
   profile(): AudioTarget | 'MIXED' | 'UNKNOWN' {
     try {
       const snapshot = this.mixer.snapshot()
       for (const target of ['NETWORK', 'FIBER'] as const)
-        if (audioPlan(snapshot, target).every(s => snapshot.sources.find(x => key(x) === key(s))!.mix === s.mix)) return target
+        if (audioPlan(snapshot, target,this.networkInput).every(s => snapshot.sources.find(x => key(x) === key(s))!.mix === s.mix)) return target
       return 'MIXED'
     } catch { return 'UNKNOWN' }
   }
-  async check(target: AudioTarget): Promise<void> { audioPlan(this.mixer.snapshot(), target); await this.zoom.check() }
+  async check(target: AudioTarget): Promise<void> { audioPlan(this.mixer.snapshot(), target,this.networkInput); await this.zoom.check() }
   async captureUndo(): Promise<() => Promise<() => Promise<string>>> {
     const saved = this.mixer.snapshot()
-    audioPlan(saved, 'NETWORK')
+    audioPlan(saved, 'NETWORK',this.networkInput)
     if (!this.zoom.selected) throw new Error('Cannot capture previous Zoom selection for undo')
     const previousZoom = await this.zoom.selected()
     return async () => {
       const current = this.mixer.snapshot()
-      audioPlan(current, 'NETWORK'); await this.zoom.check()
+      audioPlan(current, 'NETWORK',this.networkInput); await this.zoom.check()
       if (topology(current) !== topology(saved)) throw new Error('ATEM source layout differs from saved undo')
       for (const source of saved.sources)
         if (!source.supported.includes(source.mix)) throw new Error('Saved ATEM mix option is unsupported')
@@ -66,7 +75,7 @@ export class EmergencyAudio implements TransitionAudio {
   }
   async prepare(target: AudioTarget): Promise<() => Promise<string>> {
     const initial = this.mixer.snapshot()
-    const plan = audioPlan(initial, target)
+    const plan = audioPlan(initial, target,this.networkInput)
     await this.zoom.check()
     return this.prepared(initial, plan, target, target)
   }

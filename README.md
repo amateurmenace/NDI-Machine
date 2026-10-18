@@ -6,6 +6,8 @@ The project is now pinned to the latest official DeckLink SDK **16.0**. Read-onl
 
 Workers retain media across GUI/control-host restarts and use prepare/commit settings changes. The commissioned failover preset embeds Dante USB I/O Module receive 1/2 on output 1 only; outputs 2-4 are silent. Each output can instead select a different stereo source. Shared capture and independent adaptive resamplers control audio drift. See `docs/DESKTOP.md` for controls and packaging, and `reports/RELEASE-STATUS.md` for validation and remaining work.
 
+For regular production, use **Edit output** to select any discovered NDI source and compatible available DeckLink connector. Discovery runs on connection and when opening the picker; refresh and manual IP/group discovery are available. Custom output settings persist independently of the emergency preset. For emergency use, Companion shows **CLICK TO PRIME** when the app/engine is stopped: the first click opens, connects and prepares backups; a separate click toggles Fiber/Network. Hold three seconds and release to undo a change. Register the fixed local launcher with `scripts/Register-Launcher.ps1` after building the package.
+
 Build the EXE after the native targets:
 
 ```powershell

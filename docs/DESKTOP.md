@@ -1,14 +1,16 @@
 # NDI Machine desktop
 
-Launch **NDI Machine.exe** from the complete `dist/NDI Machine` folder. The GUI is a self-contained x64 WPF executable with .NET 8.0.32. Keep `engine`, `build/Release`, `config` and `notices` beside it. Installed NDI Runtime, Desktop Video and Microsoft VC++ x64 runtime are prerequisites; proprietary runtimes are not bundled.
+Launch **NDI Machine.exe** from the complete `dist/NDI Machine` folder. The GUI is a self-contained x64 WPF executable with .NET 8.0.32. Keep `engine`, `launcher`, `build/Release`, `config` and `notices` beside it. Installed NDI Runtime, Desktop Video and Microsoft VC++ x64 runtime are prerequisites; proprietary runtimes are not bundled.
 
-The GUI connects to the local engine at port 9860. Closing it leaves media and control running. **Start control host** launches the packaged host when offline and restores validated armed intent. There is no Windows startup task/service. Opening the GUI itself never prepares outputs or switches the Videohub.
+The GUI connects to the local engine at port 9860. Closing it leaves media and control running. **Start control host** launches the packaged host when offline and restores validated armed intent. Opening the GUI itself never prepares outputs or switches the Videohub. It can be used for regular production independently of Companion: choose each slot's source, audio and SDI connector in **Edit output**. Confirmed custom settings survive GUI/control restarts. **Prepare backups** is an explicit restoration of the emergency preset, not a requirement for ordinary operation.
+
+The optional lightweight launcher listens on localhost port 9861. Run `scripts/Register-Launcher.ps1` to start it and register it for the current user's Windows sign-in; `-NoStartup` starts it for this session only. On this commissioned workstation it is registered. It launches only this package's GUI/control host when Companion's **CLICK TO PRIME** is pressed. Companion then explicitly prepares the emergency preset, without changing Videohub routes or ATEM/Zoom audio. A separate press performs the toggle. No media or GUI is automatically started merely by the launcher signing in. To remove sign-in registration, remove the `NDI Machine Launcher` value from `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Output controls
 
 **Edit output** opens the source, receiver, DeckLink and audio controls for that slot:
 
-- Exact NDI source name and optional transport address (IP with optional port), populated from discovery.
+- Exact NDI source name and optional transport address (IP with optional port or the SDK's vendor HX address), populated from discovery.
 - Highest or lowest receive bandwidth. Low bandwidth changes the actual SDI source quality; it is not required for GUI thumbnails.
 - Fit/letterbox, fill/crop or stretch sizing. Output stays 1920x1080p30000/1001 UYVY for the commissioned ATEM. Other received sizes/rates are converted. Matching UYVY is copied exactly; other sizes use nearest-neighbour SDR scaling. The SDK deinterlaces and frame-synchronizes the input. HDR conversion is not implemented.
 - Any enumerated compatible, free DeckLink connector by persistent identity. No profile changes, index-based assignments or stealing occupied outputs. The commissioned OBS Key/Fill card is reserved. Changing connectors interrupts only that output after preparation; incompatible or unavailable hardware is rejected.
@@ -21,7 +23,7 @@ Settings prepare before frame-boundary commit. Confirmation requires actual work
 
 ## Discovery and monitoring
 
-**Refresh sources** performs NDI discovery without opening video receivers. **Discovery / IPs** saves up to 32 external sender IPs and an optional group list, then refreshes discovery. Select the returned named source in an output editor. The IP must be reachable and the sender must expose an NDI source; this is not an RTSP/HTTP decoder. The editor also accepts a direct NDI transport address when known.
+Sources are discovered automatically when the GUI connects and refreshed before an output editor opens. The picker shows every returned source, with editable name entry and its own **Refresh sources** button; refreshing preserves the pending selection. Discovery does not open video receivers. **Discovery / IPs** saves up to 32 external sender IPs and an optional group list, then refreshes discovery. Select the returned named source in an output editor. The IP must be reachable and the sender must expose an NDI source; this is not an RTSP/HTTP decoder. The editor also accepts a direct NDI transport address when known. Discovery can only list sources visible to the runtime's network/group configuration; it is not a guarantee of every sender across isolated networks.
 
 GUI previews reuse the already decoded output through bounded local shared memory: 320x180 BGRA, at most 4 fps, no additional NDI connection or network subscription. The GUI can pause previews. A stale, failed or mismatched revision clears its preview. Previews are optional and never block SDI scheduling; they do not prove downstream signal.
 
@@ -33,6 +35,6 @@ Windows GPU counters observed VideoDecode activity for all four commissioned HX3
 
 ## Build
 
-Run `scripts/Build-Desktop.ps1` after building native targets. `-NativeBuildDirectory build\preview\Release` selects an isolated native build. `-IncludeLocalConfiguration` creates a private workstation package; do not publish that directory or zip. The script runs control tests, publishes the GUI and host and copies owned native executables plus open-source notices. All build/package products are ignored by Git.
+Run `scripts/Build-Desktop.ps1` after building native targets. `-NativeBuildDirectory build\preview\Release` selects an isolated native build; `-OutputDirectory 'dist\NDI Machine-staging'` builds separately from a running package. `-IncludeLocalConfiguration` creates a private workstation package; do not publish that directory or zip. The script runs control tests, publishes the GUI, host and launcher, and copies owned native executables plus open-source notices. All build/package products are ignored by Git.
 
 See Microsoft's [single-file deployment documentation](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview), [NDI receiver documentation](https://docs.ndi.video/all/developing-with-ndi/sdk/ndi-recv), and [WASAPI loopback documentation](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording). GUI, control and media remain separate processes so a GUI closure cannot stop SDI.

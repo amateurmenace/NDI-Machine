@@ -45,10 +45,16 @@ public sealed class Commission
             paths.Add(new JsonObject { ["slot"] = assignment.Slot, ["destination"] = destination,
                 ["normalInput"] = normal, ["backupInput"] = backup, ["device"] = assignment.Device, ["source"] = assignment.Source });
             if (config["outputs"]!.AsArray().Any(o=>o?["slot"]?.GetValue<int>()==assignment.Slot && o["audioMode"]!=null)) paths.Last()!["audioMode"] = assignment.AudioMode;
+            if(route["atemInput"] is JsonNode atemInput) {
+                if(atemInput.GetValue<int>() is <1 or >8)throw new InvalidDataException("Commission an ATEM SDI input from 1 through 8");
+                paths.Last()!["atemInput"]=atemInput.DeepClone();
+            }
         }
         if (paths.Select(p => p!["destination"]!.GetValue<int>()).Distinct().Count() != paths.Count ||
             paths.Select(p => p!["backupInput"]!.GetValue<int>()).Distinct().Count() != paths.Count)
             throw new InvalidDataException("Duplicate commissioned Videohub destinations or backups");
+        var atemInputs=paths.Where(p=>p!["atemInput"]!=null).Select(p=>p!["atemInput"]!.GetValue<int>()).ToArray();
+        if(atemInputs.Distinct().Count()!=atemInputs.Length)throw new InvalidDataException("Duplicate commissioned ATEM input");
         Plan = new() { ["schemaVersion"] = 1, ["name"] = "Fiber to Network", ["audioEndpointId"] = Endpoint, ["paths"] = paths };
     }
     public void ValidatePlan(JsonObject candidate)

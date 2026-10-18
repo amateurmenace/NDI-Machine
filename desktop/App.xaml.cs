@@ -5,11 +5,14 @@ namespace NDIMachine.Desktop;
 
 public partial class App : Application
 {
+    private Mutex? owner;
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         try
         {
+            owner=new Mutex(true,@"Local\NDIMachine.Desktop",out var first);
+            if(!first){owner.Dispose();owner=null;Shutdown();return;}
             var root = FindRoot(e.Args);
             MainWindow = new MainWindow(root);
             MainWindow.Show();
@@ -20,6 +23,7 @@ public partial class App : Application
             Shutdown(1);
         }
     }
+    protected override void OnExit(ExitEventArgs e) {owner?.Dispose();base.OnExit(e);}
     private static string FindRoot(string[] args)
     {
         if (args.Length == 2 && args[0] == "--root") return Path.GetFullPath(args[1]);

@@ -23,12 +23,13 @@ public partial class MainWindow : Window
     private string planHost = "";
     private bool launching;
     private SourceChoice[] discovered=[];
+    private Task<SourceChoice[]>? sourceFetch;
     public MainWindow(string root)
     {
         this.root = root; InitializeComponent(); DataContext = model;
         freshness.Tick += (_, _) => { model.CheckAge(); for (var i = 0; i < 4; ++i) previews[i].Update(model.Outputs[i], model.PreviewsEnabled); };
         Loaded += (_, _) => { freshness.Start(); polling = Poll(); companionPolling = PollCompanion(); };
-        Closed += async (_, _) => { freshness.Stop(); foreach (var preview in previews) preview.Dispose(); lifetime.Cancel(); if (polling != null) await polling; if (companionPolling != null) await companionPolling; client.Dispose(); lifetime.Dispose(); };
+        Closed += async (_, _) => { freshness.Stop(); foreach (var preview in previews) preview.Dispose(); lifetime.Cancel(); if (polling != null) await polling; if (companionPolling != null) await companionPolling; if(sourceFetch!=null)try{await sourceFetch;}catch(Exception){} client.Dispose(); lifetime.Dispose(); };
     }
     private async Task PollCompanion()
     {
@@ -62,6 +63,7 @@ public partial class MainWindow : Window
                     var plan = await client.Request(HttpMethod.Get, "commission", token: lifetime.Token);
                     if (plan["schemaVersion"]?.GetValue<int>() != 1 || plan["paths"] is not JsonArray) throw new InvalidDataException("Commissioning plan is unavailable");
                     model.SetPlan(plan); planHost = instance;
+                    model.Apply(state); _ = RefreshSources();
                     // Refresh after the extra request; a plan round trip is not fresh media.
                     continue;
                 }
@@ -116,18 +118,22 @@ public partial class MainWindow : Window
     private async void DiscoverSources(object sender, RoutedEventArgs e) => await RefreshSources();
     private async Task RefreshSources()
     {
-        if (!model.CanDiscover) return;
-        model.SetBusy(true, "Discovering NDI sources…");
+        if (!model.Connected || !model.HasCapability("source-discovery")) return;
         try
         {
-            var result = await client.Request(HttpMethod.Get, "sources", milliseconds: 10000, token: lifetime.Token);
-            discovered=(result["sources"] as JsonArray ?? new()).OfType<JsonObject>().Select(s=>new SourceChoice(OutputModel.Text(s,"name"),OutputModel.Text(s,"endpoint"))).ToArray();
-            model.SetSources((result["sources"] as JsonArray ?? new()).OfType<JsonObject>().Select(s => OutputModel.Text(s, "name")));
-            model.Message("Source discovery complete. Apply a source to prepare and commit it.");
+            await LoadSources();
+            model.Message($"{discovered.Length} NDI sources discovered. Select any source in an output editor.");
         }
         catch (Exception error) when (!lifetime.IsCancellationRequested) { model.Message("Discovery failed: " + Friendly(error)); }
         catch (OperationCanceledException) { }
-        finally { if (!lifetime.IsCancellationRequested) model.SetBusy(false, model.Notice); }
+    }
+    private Task<SourceChoice[]> LoadSources()=>sourceFetch ??= FetchSources();
+    private async Task<SourceChoice[]> FetchSources() {
+        try {
+            var result=await client.Request(HttpMethod.Get,"sources",milliseconds:15000,token:lifetime.Token);
+            discovered=(result["sources"] as JsonArray ?? new()).OfType<JsonObject>().Select(s=>new SourceChoice(OutputModel.Text(s,"name"),OutputModel.Text(s,"endpoint"))).OrderBy(s=>s.Name).ToArray();
+            model.SetSources(discovered.Select(s=>s.Name));return discovered;
+        }finally{sourceFetch=null;}
     }
     private void OpenCompanion(object sender, RoutedEventArgs e)
     {
@@ -140,10 +146,11 @@ public partial class MainWindow : Window
         if(!model.HasCapability("output-settings")){model.Message("Start the updated control host to use output settings.");return;}
         model.SetBusy(true,"Reading available Windows audio and DeckLink devices…");
         try {
+            try{await LoadSources();}catch(Exception error)when(!lifetime.IsCancellationRequested){model.Message("Discovery unavailable; saved sources and manual entry remain available: "+Friendly(error));}
             var inventory=await client.Request(HttpMethod.Get,"inventory",milliseconds:15000,token:lifetime.Token);
             var choices=discovered.Concat(output.Sources.Where(n=>!discovered.Any(s=>s.Name==n)).Select(n=>new SourceChoice(n,""))).ToArray();
             var host=model.Host;var epoch=OutputModel.Text(output.State,"workerInstanceId");var revision=output.Revision;
-            var editor=new OutputEditor(output,inventory,choices){Owner=this};
+            var editor=new OutputEditor(output,inventory,choices,LoadSources){Owner=this};
             if(editor.ShowDialog()!=true || editor.Settings==null)return;
             var request=new JsonObject{["schemaVersion"]=1,["slot"]=output.Slot,["settings"]=editor.Settings.DeepClone(),
                 ["expectedInstanceId"]=host,["expectedWorkerInstanceId"]=epoch,["expectedRevision"]=revision};
@@ -217,7 +224,7 @@ public partial class MainWindow : Window
             FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 12, Background = (System.Windows.Media.Brush)FindResource("Canvas"), Foreground = (System.Windows.Media.Brush)FindResource("Ink"), BorderThickness = new Thickness(0) };
         panel.Children.Add(text); window.Content = panel; window.ShowDialog();
     }
-    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.3.0", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.3.2", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
         ["controlConnected"] = model.Connected, ["physicalSignalVerified"] = "Unknown", ["state"] = model.State?.DeepClone(), ["plan"] = model.Plan?.DeepClone(),
         ["events"] = new JsonArray(model.Events.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) };
     private string DiagnosticText() => DiagnosticSnapshot().ToJsonString(new JsonSerializerOptions { WriteIndented = true });
