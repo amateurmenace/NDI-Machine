@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     public MainWindow(string root)
     {
         this.root = root; InitializeComponent(); DataContext = model;
+        try{var preference=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"config","local.desktop.json")));model.SetMode(preference?["mode"]?.GetValue<string>()!="failover");}catch(Exception){model.SetMode(true);}
         freshness.Tick += (_, _) => { model.CheckAge(); for (var i = 0; i < 4; ++i) previews[i].Update(model.Outputs[i], model.PreviewsEnabled); };
         Loaded += (_, _) => { freshness.Start(); polling = Poll(); companionPolling = PollCompanion(); };
         Closed += async (_, _) => { freshness.Stop(); foreach (var preview in previews) preview.Dispose(); lifetime.Cancel(); if (polling != null) await polling; if (companionPolling != null) await companionPolling; if(sourceFetch!=null)try{await sourceFetch;}catch(Exception){} client.Dispose(); lifetime.Dispose(); };
@@ -37,6 +38,7 @@ public partial class MainWindow : Window
         { Timeout = TimeSpan.FromSeconds(2), MaxResponseContentBufferSize = 65536 };
         while (!lifetime.IsCancellationRequested)
         {
+            if(model.ProductionMode){try{await Task.Delay(2000,lifetime.Token);}catch(OperationCanceledException){break;}continue;}
             try
             {
                 var json = await http.GetStringAsync("http://127.0.0.1:8000/api/connections", lifetime.Token);
@@ -75,6 +77,12 @@ public partial class MainWindow : Window
         }
     }
     private static string Friendly(Exception error) => error is OperationCanceledException ? "request deadline exceeded" : error.Message;
+    private void SelectMode(object sender,RoutedEventArgs e) {
+        if(sender is not RadioButton button)return;
+        model.SetMode((string)button.Tag=="production");
+        try{File.WriteAllText(Path.Combine(root,"config","local.desktop.json"),new JsonObject{["mode"]=model.ProductionMode?"production":"failover"}.ToJsonString());}
+        catch(Exception error){model.Message("Mode selected; could not save preference: "+error.Message);}
+    }
     private async Task Command(string label, Func<Task> work)
     {
         if (model.Busy) return;
@@ -224,7 +232,7 @@ public partial class MainWindow : Window
             FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 12, Background = (System.Windows.Media.Brush)FindResource("Canvas"), Foreground = (System.Windows.Media.Brush)FindResource("Ink"), BorderThickness = new Thickness(0) };
         panel.Children.Add(text); window.Content = panel; window.ShowDialog();
     }
-    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.3.2", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.4.0", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
         ["controlConnected"] = model.Connected, ["physicalSignalVerified"] = "Unknown", ["state"] = model.State?.DeepClone(), ["plan"] = model.Plan?.DeepClone(),
         ["events"] = new JsonArray(model.Events.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) };
     private string DiagnosticText() => DiagnosticSnapshot().ToJsonString(new JsonSerializerOptions { WriteIndented = true });

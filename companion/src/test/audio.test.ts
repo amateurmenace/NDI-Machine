@@ -56,6 +56,20 @@ test('network enables only Input 1; fiber only XLR and MADI 1/2 + 3/4 across all
   assert.ok(audioPlan(state, 'FIBER').filter(s => ![1001, 1501, 1502].includes(s.input)).every(s => s.mix === OFF))
 })
 
+test('explicit audio destination selects Input 3 without changing the video plan',async()=>{
+  const plan:Plan={schemaVersion:1,name:'keep video',audioEndpointId:'usb',networkAudioInput:3,paths:[
+    {slot:1,device:'0x1',source:'Camera A',destination:33,normalInput:9,backupInput:6,audioMode:'fixed',atemInput:1},
+    {slot:2,device:'0x2',source:'Camera B',destination:34,normalInput:10,backupInput:7,audioMode:'silent',atemInput:2},
+    {slot:3,device:'0x3',source:'Camera C',destination:35,normalInput:11,backupInput:8,audioMode:'silent',atemInput:3},
+    {slot:4,device:'0x4',source:'Camera D',destination:36,normalInput:12,backupInput:5,audioMode:'silent',atemInput:4},
+  ]}
+  const original=structuredClone(plan);const mixer=new Mixer()
+  await (await new EmergencyAudio(mixer,new Buttons(),networkAudioInput(validatePlan(plan))).prepare('NETWORK'))()
+  assert.deepEqual(mixer.state.sources.filter(s=>s.mix===ON).map(s=>s.input),[3]);assert.deepEqual(plan,original)
+  for(const value of [0,9,1.5,NaN])assert.throws(()=>networkAudioInput(validatePlan({...plan,networkAudioInput:value})))
+  const ambiguous=structuredClone(plan);ambiguous.paths[1].audioMode='fixed';assert.throws(()=>networkAudioInput(ambiguous))
+})
+
 test('audio undo restores exact prior mixed On/Off/AFV options and previous Zoom selection', async () => {
   const mixer = new Mixer(); const buttons = new Buttons(); const audio = new EmergencyAudio(mixer, buttons)
   mixer.state.sources[3].mix = 4; mixer.state.sources[5].mix = OFF

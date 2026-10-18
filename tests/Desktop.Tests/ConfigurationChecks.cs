@@ -9,6 +9,24 @@ internal static class ConfigurationChecks
     private static async Task Reject(Func<Task> work){try{await work();}catch(Exception){return;}throw new Exception("Expected rejection");}
     internal static JsonObject Settings(string source="Camera A")=>OutputConfiguration.Validate(OutputConfiguration.Default(new(1,"0x123",source,"silent"),"usb"));
     public static async Task Run(Func<string,Func<Task>,Task> test) {
+        await test("Production mode reports actual output health independently of emergency assignments",()=>{
+            var dashboard=new DashboardModel();dashboard.SetPlan(new(){["paths"]=new JsonArray(new JsonObject{["slot"]=1,["source"]="Emergency",["device"]="0x123",["audioMode"]="silent"})});
+            dashboard.Apply(new(){["instanceId"]="host",["outputs"]=new JsonArray(new ConfigurationPipe().Snapshot())});
+            Require(dashboard.ProductionMode && dashboard.Readiness=="1 / 1");
+            dashboard.SetMode(false);Require(dashboard.Readiness=="0 / 1");
+            dashboard.SetMode(true);Require(dashboard.Outputs[0].Source=="Camera A" && dashboard.Readiness=="1 / 1");return Task.CompletedTask;
+        });
+        await test("group restore accepts connector cycles only among identified app workers",async()=>{
+            var a=Settings();var b=Settings("Camera B");b["device"]="0x456";
+            var state1=new ConfigurationPipe().Snapshot();var state2=new ConfigurationPipe().Snapshot();state2["deviceId"]="0x456";state2["workerInstanceId"]="second";
+            var targets=new Dictionary<int,JsonObject>{{1,b},{2,a}};var states=new Dictionary<int,JsonObject?>{{1,state1},{2,state2}};
+            var inventory=await new FakeInventory().Get(default);var devices=inventory["decklink"]!["devices"]!.AsArray();devices[0]!["busyFlags"]=2;
+            var other=(JsonObject)devices[0]!.DeepClone();other["persistentId"]="0x456";devices.Add(other);
+            Require(OutputManager.ValidateGroup(targets,states,inventory).SequenceEqual(new[]{1,2}));
+            states[2]=null;await Reject(()=>Task.FromResult(OutputManager.ValidateGroup(targets,states,inventory)));
+            states[2]=state2;other["deviceGroupId"]="0x86346c40";await Reject(()=>Task.FromResult(OutputManager.ValidateGroup(targets,states,inventory)));
+            other["deviceGroupId"]="0x100";state2["backend"]="simulation";await Reject(()=>Task.FromResult(OutputManager.ValidateGroup(targets,states,inventory)));
+        });
         await test("audio policy and bounded settings reject invalid devices, addresses, channels and delay",async()=>{
             Require(Settings()["audioMode"]!.GetValue<string>()=="silent");
             foreach(var (key,value) in new (string,JsonNode)[]{("left",JsonValue.Create(0)!),("delayMs",JsonValue.Create(501)!),("gainDb",JsonValue.Create(13)!),("device",JsonValue.Create("index:0")!),("sourceUrl",JsonValue.Create("https://example.test")!)}) {
@@ -59,6 +77,16 @@ internal static class ConfigurationChecks
                     File.WriteAllText(path,configured.ToJsonString());var mapped=new Commission(path,root);
                     Require(mapped.Plan["paths"]![0]!["atemInput"]!.GetValue<int>()==3);
                     var dashboard=new DashboardModel();dashboard.SetPlan(mapped.Plan);Require(dashboard.NetworkAudioSummary.Contains("Input 3 only"));
+                    configured["videohub"]!["paths"]![0]!["atemInput"]=1;
+                    configured["audio"]!["networkAtemInput"]=3;
+                    File.WriteAllText(path,configured.ToJsonString());var explicitAudio=new Commission(path,root);
+                    Require(explicitAudio.Plan["paths"]![0]!["atemInput"]!.GetValue<int>()==1);
+                    Require(explicitAudio.Plan["paths"]![0]!["backupInput"]!.GetValue<int>()==6);
+                    Require(explicitAudio.Plan["networkAudioInput"]!.GetValue<int>()==3);
+                    dashboard.SetPlan(explicitAudio.Plan);Require(dashboard.NetworkAudioSummary.Contains("Input 3 only"));
+                    configured["audio"]!["networkAtemInput"]=9;File.WriteAllText(path,configured.ToJsonString());
+                    await Reject(()=>Task.FromResult(new Commission(path,root)));
+                    configured["audio"]!["networkAtemInput"]=3;
                     configured["videohub"]!["paths"]![0]!["atemInput"]=9;File.WriteAllText(path,configured.ToJsonString());
                     await Reject(()=>Task.FromResult(new Commission(path,root)));
                 }finally{File.WriteAllText(path,original);}
@@ -76,6 +104,12 @@ internal static class ConfigurationChecks
                 var pipe=new ConfigurationPipe();var manager=new OutputManager(commission,pipe,new FakeInventory());var sent=false;
                 await manager.Apply(1,Settings("Camera B"),pipe.Expected(),true,()=>sent=true,default);
                 Require(sent && pipe.Commits==1 && pipe.Reads>=3 && pipe.Current["source"]!.GetValue<string>()=="Camera B");
+            });
+            await test("group restores custom sources once and rejects stale expectations before writes",async()=>{
+                var pipe=new ConfigurationPipe();var manager=new OutputManager(commission,pipe,new FakeInventory());var targets=new Dictionary<int,JsonObject>{{1,Settings("Camera B")}};
+                var expected=new JsonObject{["1"]=pipe.Expected()};
+                await manager.ApplyGroup(targets,expected,()=>{},default);Require(pipe.Commits==1 && pipe.Current["source"]!.GetValue<string>()=="Camera B");
+                await Reject(()=>manager.ApplyGroup(new Dictionary<int,JsonObject>{{1,Settings()}},expected,()=>{},default));Require(pipe.Commits==1);
             });
             await test("general output preparation failure and revision races preserve old settings",async()=>{
                 foreach(var mutation in new[]{"prepare","revision","epoch"}) {

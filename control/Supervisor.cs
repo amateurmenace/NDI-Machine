@@ -59,6 +59,19 @@ public sealed class Supervisor : BackgroundService
         }
     }
     public JsonObject AcceptPrepare(string id,JsonObject plan) {config.ValidatePlan(plan);return Accept(id,new(){["kind"]="prepare",["plan"]=plan.DeepClone()});}
+    public JsonObject AcceptRestore(string id,JsonObject request) {
+        if(request["schemaVersion"]?.GetValue<int>()!=1 || request["expectedInstanceId"]?.GetValue<string>()!=InstanceId || request["outputs"] is not JsonObject outputs || outputs.Count!=config.Outputs.Length || request["expectedWorkers"] is not JsonObject expected)
+            throw new InvalidDataException("Current host and complete output snapshot required");
+        var validated=new JsonObject();
+        foreach(var output in config.Outputs) {
+            var key=output.Slot.ToString();
+            if(outputs[key] is not JsonObject settings || expected[key]?["expectedWorkerInstanceId"] is not JsonValue || expected[key]?["expectedRevision"]?.GetValue<long>() is not >=0)
+                throw new InvalidDataException("Every slot needs settings and expected worker identity");
+            validated[key]=OutputConfiguration.Validate(settings);
+        }
+        if(validated.Select(p=>p.Value!["device"]!.GetValue<string>()).Distinct().Count()!=validated.Count)throw new InvalidDataException("Duplicate DeckLink target");
+        var command=(JsonObject)request.DeepClone();command["outputs"]=validated;command["kind"]="restore";return Accept(id,command);
+    }
     public JsonObject AcceptConfiguration(string id,JsonObject request) {
         var slot=request["slot"]?.GetValue<int>() ?? 0;
         if(request["schemaVersion"]?.GetValue<int>()!=1 || request["expectedInstanceId"]?.GetValue<string>()!=InstanceId || !desired.ContainsKey(slot))
@@ -93,10 +106,12 @@ public sealed class Supervisor : BackgroundService
             foreach(var key in new[]{"videoAgeMs","scheduleAgeMs"}) if(sample.Value[key]!=null)sample.Value[key]=sample.Value[key]!.GetValue<long>()+elapsed;
             if(sample.Value["audio"] is JsonObject audio && audio["ageMs"]!=null)audio["ageMs"]=audio["ageMs"]!.GetValue<long>()+elapsed;
             lock(sync)sample.Value["desiredSettings"]=desired[sample.Value["slot"]!.GetValue<int>()].DeepClone();
+            var assignment=config.Outputs.Single(o=>o.Slot==sample.Value["slot"]!.GetValue<int>());
+            sample.Value["emergencyConfigured"]=OutputConfiguration.Matches(OutputConfiguration.Validate(OutputConfiguration.Default(assignment,config.Endpoint)),sample.Value);
             outputs.Add(sample.Value);
         }
         lock(sync)return new(){["schemaVersion"]=1,["nonce"]=nonce,["instanceId"]=InstanceId,["outputs"]=outputs,["armed"]=armed,["lastError"]=lastError,["pendingOperationId"]=pending,
-            ["capabilities"]=new JsonArray("source-routing","source-discovery","output-settings","inventory","manual-discovery"),["sampleDurationMs"]=timer.Elapsed.TotalMilliseconds,["physicalSignalVerified"]="Unknown"};
+            ["capabilities"]=new JsonArray("source-routing","source-discovery","output-settings","inventory","manual-discovery","emergency-restore"),["sampleDurationMs"]=timer.Elapsed.TotalMilliseconds,["physicalSignalVerified"]="Unknown"};
     }
     protected override async Task ExecuteAsync(CancellationToken token) {
         while(!token.IsCancellationRequested) {
@@ -111,13 +126,9 @@ public sealed class Supervisor : BackgroundService
                         await manager.Apply(slot,settings,request,true,()=>sent=true,token);
                         lock(sync){desired[slot]=(JsonObject)settings.DeepClone();armed=true;SaveIntent();}
                     } else {
-                        foreach(var output in config.Outputs) {
-                            var settings=OutputConfiguration.Validate(OutputConfiguration.Default(output,config.Endpoint));
-                            lock(sync)if(desired.Any(p=>p.Key!=output.Slot && p.Value["device"]!.GetValue<string>()==output.Device))
-                                throw new InvalidOperationException("Restore conflicting DeckLink assignments individually first");
-                            await manager.Apply(output.Slot,settings,null,true,()=>sent=true,token);
-                            lock(sync){desired[output.Slot]=settings;armed=true;SaveIntent();}
-                        }
+                        var targets=config.Outputs.ToDictionary(o=>o.Slot,o=>request["kind"]!.GetValue<string>()=="restore" ? request["outputs"]![o.Slot.ToString()]!.AsObject() : OutputConfiguration.Validate(OutputConfiguration.Default(o,config.Endpoint)));
+                        await manager.ApplyGroup(targets,request["expectedWorkers"] as JsonObject,()=>sent=true,token);
+                        lock(sync){foreach(var pair in targets)desired[pair.Key]=(JsonObject)pair.Value.DeepClone();armed=true;SaveIntent();}
                     }
                     lock(sync){operations[operation]["state"]="committed";pending=null;lastError="";}
                     await manager.CleanupAudio(desired.Values,token);
@@ -134,7 +145,7 @@ public sealed class Supervisor : BackgroundService
                     lock(sync)if(errors.Count>0)lastError=string.Join("; ",errors);
                 }
             }catch(Exception error)when(!token.IsCancellationRequested) {
-                lock(sync){lastError=error.Message;if(operation!=null){operations[operation]["state"]=sent?"unknown":"failed";operations[operation]["error"]=lastError;pending=null;}}
+                lock(sync){lastError=error.Message;if(operation!=null){operations[operation]["state"]=sent?"unknown":"failed";operations[operation]["error"]=lastError;pending=null;if(sent && request?["kind"]?.GetValue<string>() is "prepare" or "restore"){armed=false;SaveIntent();}}}
             }
             await Task.Delay(1000,token);
         }

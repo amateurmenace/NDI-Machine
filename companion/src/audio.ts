@@ -17,7 +17,9 @@ export function networkAudioInput(plan:Plan):number {
   const carrying=plan.paths.filter(p=>p.audioMode==='fixed')
   if(carrying.length!==1 || plan.paths.some(p=>!['fixed','silent'].includes(p.audioMode ?? '')))
     throw new Error('Commission exactly one audio-bearing backup path; all other paths must be silent')
-  const input=carrying[0].atemInput
+  // A physically confirmed audio destination may differ from the slot/video
+  // labels. Keep the selected video routes intact when commissioning audio.
+  const input=plan.networkAudioInput ?? carrying[0].atemInput
   if(!Number.isSafeInteger(input) || input!<1 || input!>8)throw new Error('Commission the physical ATEM input for the audio-bearing backup path')
   return input!
 }

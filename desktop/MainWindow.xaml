@@ -15,18 +15,23 @@
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" Background="#151D26" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="28,10">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.3.2" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.4.0" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid Margin="28,24"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="22" /><ColumnDefinition Width="300" /></Grid.ColumnDefinitions>
         <StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+            <RadioButton Content="Production" Tag="production" GroupName="WorkMode" IsChecked="{Binding ProductionMode, Mode=OneWay}" Click="SelectMode" Foreground="{StaticResource Ink}" FontSize="17" Margin="0,0,24,0" />
+            <RadioButton Content="Failover" Tag="failover" GroupName="WorkMode" IsChecked="{Binding FailoverMode, Mode=OneWay}" Click="SelectMode" Foreground="{StaticResource Ink}" FontSize="17" />
+          </StackPanel>
+          <TextBlock Text="{Binding ModeDescription}" Foreground="{StaticResource Muted}" Margin="0,0,0,16" />
           <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-            <StackPanel><TextBlock Text="Output overview" FontSize="26" FontWeight="SemiBold" /><CheckBox Content="Local previews · no extra NDI subscriptions" IsChecked="{Binding PreviewsEnabled}" Foreground="{StaticResource Muted}" Margin="0,6,0,0" /></StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><Button Content="Refresh sources" Click="DiscoverSources" IsEnabled="{Binding CanDiscover}" ToolTip="{Binding SourceNotice}" /><Button Content="Prepare backups" Style="{StaticResource Primary}" Click="PrepareBackups" IsEnabled="{Binding CanPrepare}" Margin="8,0,0,0" ToolTip="Start or restore all commissioned backup sources. Does not change Videohub routes." /></StackPanel>
+            <StackPanel><TextBlock Text="{Binding ModeHeading}" FontSize="26" FontWeight="SemiBold" /><CheckBox Content="Local previews · no extra NDI subscriptions" IsChecked="{Binding PreviewsEnabled}" Foreground="{StaticResource Muted}" Margin="0,6,0,0" /></StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><Button Content="Refresh sources" Click="DiscoverSources" IsEnabled="{Binding CanDiscover}" ToolTip="{Binding SourceNotice}" /><Button Content="Prepare backups" Visibility="{Binding FailoverMode, Converter={StaticResource VisibleIf}}" Style="{StaticResource Primary}" Click="PrepareBackups" IsEnabled="{Binding CanPrepare}" Margin="8,0,0,0" ToolTip="Start or restore all commissioned backup sources. Does not change Videohub routes." /></StackPanel>
           </Grid>
           <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="12" /><ColumnDefinition /><ColumnDefinition Width="12" /><ColumnDefinition /></Grid.ColumnDefinitions>
             <Border Style="{StaticResource Card}" Padding="16,12"><StackPanel><TextBlock Text="{Binding ReadyCaption}" Style="{StaticResource Label}" /><TextBlock Text="{Binding Readiness}" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Margin="0,3,0,0" /></StackPanel></Border>
-            <Border Grid.Column="2" Style="{StaticResource Card}" Padding="16,12"><StackPanel><TextBlock Text="DANTE USB AUDIO" Style="{StaticResource Label}" /><TextBlock Text="{Binding AudioSummary}" FontSize="22" Margin="0,7,0,0" /></StackPanel></Border>
+            <Border Grid.Column="2" Style="{StaticResource Card}" Padding="16,12"><StackPanel><TextBlock Text="{Binding AudioCaption}" Style="{StaticResource Label}" /><TextBlock Text="{Binding AudioSummary}" FontSize="22" Margin="0,7,0,0" /></StackPanel></Border>
             <Border Grid.Column="4" Style="{StaticResource Card}" Padding="16,12"><StackPanel><TextBlock Text="WORKER RECOVERY" Style="{StaticResource Label}" /><TextBlock Text="{Binding Armed}" FontSize="22" Margin="0,7,0,0" /></StackPanel></Border>
           </Grid>
           <ItemsControl ItemsSource="{Binding Outputs}" Margin="-6,0,-6,0">
@@ -57,7 +62,17 @@
             </DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
         </StackPanel>
-        <StackPanel Grid.Column="2">
+        <StackPanel Grid.Column="2" Visibility="{Binding ProductionMode, Converter={StaticResource VisibleIf}}">
+          <Border Style="{StaticResource Card}"><StackPanel>
+            <TextBlock Text="NDI → SDI" Style="{StaticResource Label}" /><TextBlock Text="Route your production" FontSize="22" FontWeight="SemiBold" Margin="0,8,0,16" />
+            <TextBlock Text="1. Open an output editor.&#10;&#10;2. Choose an NDI stream and DeckLink connector.&#10;&#10;3. Select NDI audio, a Windows audio device, or silence.&#10;&#10;4. Apply to that output." Foreground="{StaticResource Muted}" />
+            <Separator /><TextBlock Text="Discovery / IPs adds remote senders. Receiver settings, audio levels, delay and statistics are available per output." Foreground="{StaticResource Muted}" FontSize="12" />
+            <Separator /><TextBlock Text="Production routing works independently of Companion and the Videohub. Changing this view does not change your outputs." Foreground="{StaticResource Accent}" FontSize="12" />
+          </StackPanel></Border>
+          <TextBlock Text="The Stream Deck failover button can take over these outputs with the saved emergency preset. Hold 3 seconds and release to restore the previous production, video and audio settings." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />
+          <TextBlock Text="Closing this window leaves your outputs running." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Visibility="{Binding FailoverMode, Converter={StaticResource VisibleIf}}">
           <Border Style="{StaticResource Card}" BorderBrush="#4C625D" Margin="0,0,0,16">
             <StackPanel><TextBlock Text="EMERGENCY CONTROL" Style="{StaticResource Label}" /><TextBlock Text="Fiber ↔ Network" FontSize="22" FontWeight="SemiBold" Margin="0,8,0,10" />
               <TextBlock Text="{Binding CompanionStatus}" Foreground="{Binding CompanionColor}" FontWeight="SemiBold" FontSize="13" />

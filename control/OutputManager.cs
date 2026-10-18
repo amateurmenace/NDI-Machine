@@ -57,6 +57,43 @@ public sealed class OutputManager(Commission commission, IWorkerPipe pipes, IInv
         if(state==null ? epoch.Length!=0 || revision!=0 : state["workerInstanceId"]?.GetValue<string>()!=epoch || state["configRevision"]?.GetValue<long>()!=revision)
             throw new InvalidOperationException("Worker changed since the editor was opened; reload actual settings");
     }
+    // A deliberate group restore may reclaim this application's own connectors,
+    // including cycles. Unknown owners and the reserved OBS card remain protected.
+    public static int[] ValidateGroup(IReadOnlyDictionary<int,JsonObject> targets, IReadOnlyDictionary<int,JsonObject?> states, JsonObject inventory) {
+        if(targets.Values.Select(s=>s["device"]!.GetValue<string>()).Distinct().Count()!=targets.Count)
+            throw new InvalidDataException("Duplicate DeckLink target");
+        if(states.Values.Any(s=>s!=null && (s["backend"]?.GetValue<string>()!="hardware" || string.IsNullOrEmpty(s["workerInstanceId"]?.GetValue<string>()))))
+            throw new InvalidOperationException("Only identified hardware workers can be restored");
+        foreach(var settings in targets.Values) {
+            var owners=states.Values.Where(s=>s?["deviceId"]?.GetValue<string>()==settings["device"]!.GetValue<string>()).ToArray();
+            if(owners.Length>1 || owners.Any(s=>s?["backend"]?.GetValue<string>()!="hardware" || string.IsNullOrEmpty(s?["workerInstanceId"]?.GetValue<string>())))
+                throw new InvalidOperationException("DeckLink ownership is ambiguous");
+            Inventory.ValidateTarget(settings,inventory,owners.SingleOrDefault(),[]);
+        }
+        return targets.Keys.Where(slot=>states[slot]!=null && states[slot]!["deviceId"]?.GetValue<string>()!=targets[slot]["device"]!.GetValue<string>()).ToArray();
+    }
+    public async Task ApplyGroup(IReadOnlyDictionary<int,JsonObject> targets, JsonObject? expected, Action sent, CancellationToken token) {
+        var states=new Dictionary<int,JsonObject?>();
+        foreach(var slot in targets.Keys) {
+            states[slot]=await State(slot,token);
+            if(expected!=null) CheckExpected(states[slot],expected[slot.ToString()]!.AsObject());
+        }
+        var release=ValidateGroup(targets,states,await inventory.Get(token));
+        // Validate every slot again before releasing any connector.
+        foreach(var slot in targets.Keys) CheckExpected(await State(slot,token),Expected(states[slot]));
+        foreach(var slot in release) {
+            CheckExpected(await State(slot,token),Expected(states[slot]));
+            sent();
+            await pipes.Call($"NDIMachine.output.{slot}.v1",new(){["method"]="stop"},2000,token);
+            var timer=Stopwatch.StartNew();
+            while(!Ownable($"Global\\NDIMachine.slot.{slot}")) {
+                if(timer.ElapsedMilliseconds>5000)throw new InvalidOperationException("Worker did not release connector; no forced termination");
+                await Task.Delay(50,token);
+            }
+        }
+        foreach(var pair in targets) await Apply(pair.Key,pair.Value,release.Contains(pair.Key)?Expected(null):Expected(states[pair.Key]),true,sent,token);
+    }
+    private static JsonObject Expected(JsonObject? state)=>new(){["expectedWorkerInstanceId"]=state?["workerInstanceId"]?.DeepClone() ?? JsonValue.Create(""),["expectedRevision"]=state?["configRevision"]?.DeepClone() ?? JsonValue.Create(0)};
     public async Task Apply(int slot,JsonObject settings,JsonObject? expected,bool deliberate,Action sent,CancellationToken token) {
         var initial=await State(slot,token);
         if(expected!=null) CheckExpected(initial,expected);

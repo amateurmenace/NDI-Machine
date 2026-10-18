@@ -39,7 +39,7 @@ public sealed class OutputModel(int slot) : Observable
         Text(State, "health") == "healthy" && Revision > 0 && Text(State, "committedOperationId").Length > 0 &&
         NumberAt(State, "videoAgeMs", long.MaxValue) is >= 0 and < 500 && NumberAt(State, "scheduleAgeMs", long.MaxValue) is >= 0 and < 500;
     public bool AudioFresh => Fresh && NumberAt(State?["audio"] as JsonObject, "ageMs", long.MaxValue) is >= 0 and < 500 && State?["audio"]?["muted"]?.GetValue<bool>() == false;
-    public bool PlanReady(string? endpoint) => SoftwareHealthy && Source == ExpectedSource &&
+    public bool PlanReady(string? endpoint) => State?["emergencyConfigured"]?.GetValue<bool>()!=false && SoftwareHealthy && Source == ExpectedSource &&
         Device.Equals(Text(Path, "device"), StringComparison.OrdinalIgnoreCase) && Format == "1080p 29.97  /  UYVY" &&
         State?["fallback"]?.GetValue<bool>() == false && (Text(Path,"audioMode")=="silent" ?
             Text(State?["audio"] as JsonObject,"mode")=="silent" && State?["audio"]?["muted"]?.GetValue<bool>()==true :
@@ -72,7 +72,7 @@ public sealed class OutputModel(int slot) : Observable
     public string OtherCounters => $"Fallback {NumberAt(State?["counters"] as JsonObject, "fallback"):N0}  ·  Input repeats {NumberAt(State?["counters"] as JsonObject, "inputRepeats"):N0}";
     public string Mapping => Path == null ? "Mapping unavailable" : $"Fiber {NumberAt(Path, "normalInput")}   /   Network {NumberAt(Path, "backupInput")}   →   Out {NumberAt(Path, "destination")}" +
         (Path["atemInput"] is JsonNode input ? $"   →   ATEM {input}" : "");
-    public string Detail => !Fresh ? "Last source shown. Commands disabled until fresh state returns." : Text(State, "error", Source != ExpectedSource ? "Custom source · restore the backup plan before emergency use." : "Edit output for device, audio and receiver controls.");
+    public string Detail => !Fresh ? "Last source shown. Commands disabled until fresh state returns." : Text(State, "error", "Edit output for device, audio and receiver controls.");
     public bool CanApply => CanRoute && Fresh && SelectedSource.Trim().Length > 0 && SelectedSource != Source && State?["running"]?.GetValue<bool>() == true;
     public void Update(JsonObject? state, JsonObject? path, bool fresh, bool canRoute)
     {
@@ -92,6 +92,11 @@ public sealed class OutputModel(int slot) : Observable
 
 public sealed class DashboardModel : Observable
 {
+    public bool ProductionMode {get;private set;}=true;
+    public bool FailoverMode=>!ProductionMode;
+    public string ModeHeading=>ProductionMode ? "Production routing" : "Failover outputs";
+    public string ModeDescription=>ProductionMode ? "Choose any discovered NDI source and an available DeckLink output. Apply changes per output." : "Saved emergency assignments. The Companion failover button restores this preset before taking Network.";
+    public void SetMode(bool production){ProductionMode=production;Changed();}
     public bool PreviewsEnabled { get; set; } = true;
     public ObservableCollection<OutputModel> Outputs { get; } = new(Enumerable.Range(1, 4).Select(n => new OutputModel(n)));
     public ObservableCollection<string> Events { get; } = new();
@@ -100,7 +105,8 @@ public sealed class DashboardModel : Observable
     public string NetworkAudioSummary {
         get {
             var paths=(Plan?["paths"] as JsonArray)?.OfType<JsonObject>().Where(p=>OutputModel.Text(p,"audioMode")=="fixed").ToArray();
-            return paths?.Length==1 && paths[0]["atemInput"] is JsonNode input ? $"ZOOM DANTE · ATEM Input {input} only" : "ZOOM DANTE · audio destination needs commissioning";
+            var input=Plan?["networkAudioInput"] ?? (paths?.Length==1 ? paths[0]["atemInput"] : null);
+            return paths?.Length==1 && input!=null ? $"ZOOM DANTE · ATEM Input {input} only" : "ZOOM DANTE · audio destination needs commissioning";
         }
     }
     private long received;
@@ -119,9 +125,10 @@ public sealed class DashboardModel : Observable
     {
         CompanionStatus = status; CompanionReason = reason; CompanionColor = ready ? "#7DE1CC" : "#F6BD75"; Changed();
     }
-    public string Readiness => $"{Outputs.Count(o => o.PlanReady(OutputModel.Text(Plan, "audioEndpointId")))} / {(Plan?["paths"] is JsonArray paths ? paths.Count : 4)}";
-    public string ReadyCaption => Connected ? "BACKUPS MATCHING PLAN" : "READINESS UNKNOWN";
-    public string AudioSummary => !Connected ? "Unknown" : Outputs[0].AudioFresh ? "Output 1 ready" : "Needs attention";
+    public string Readiness => $"{Outputs.Count(o => ProductionMode ? o.SoftwareHealthy : o.PlanReady(OutputModel.Text(Plan, "audioEndpointId")))} / {(Plan?["paths"] is JsonArray paths ? paths.Count : 4)}";
+    public string ReadyCaption => !Connected ? "READINESS UNKNOWN" : ProductionMode ? "OUTPUTS RUNNING" : "BACKUPS MATCHING PLAN";
+    public string AudioCaption=>ProductionMode ? "OUTPUT AUDIO" : "DANTE USB AUDIO";
+    public string AudioSummary => !Connected ? "Unknown" : ProductionMode ? $"{Outputs.Count(o=>o.AudioFresh)} active / {Outputs.Count(o=>OutputModel.Text(o.State?["audio"] as JsonObject,"mode")=="silent")} silent" : Outputs[0].AudioFresh ? "Output 1 ready" : "Needs attention";
     public string Armed => !Connected ? "Unknown" : State?["armed"]?.GetValue<bool>() == true ? "Armed" : "Not armed";
     public bool CanPrepare => Connected && !Busy && Plan != null && State?["pendingOperationId"] == null;
     public bool CanDiscover => Connected && !Busy && HasCapability("source-discovery");

@@ -3,15 +3,18 @@ import { performance } from 'node:perf_hooks'
 import type { HubSnapshot, Router } from './videohub.js'
 
 export type Path = {slot: number; destination: number; normalInput: number; backupInput: number; device: string; source: string; audioMode?: 'fixed' | 'silent'; atemInput?:number}
-export type Plan = {schemaVersion: 1; name: string; audioEndpointId: string; paths: Path[]}
+export type Plan = {schemaVersion: 1; name: string; audioEndpointId: string; paths: Path[]; networkAudioInput?:number}
 export type ReadyOutput = {
   slot: number; deviceId: string; source: string; backend: string; running: boolean;
   configRevision: number; committedOperationId: string; videoAgeMs: number; scheduleAgeMs: number;
   fallback: boolean; format: string; audio: {endpointId: string; channels: number[]; mode: string; ageMs: number; muted: boolean};
-  health: string
+  health: string; emergencyConfigured?:boolean; workerInstanceId?:string; settings?:Record<string,unknown>; desiredSettings?:Record<string,unknown>
 }
-export type MediaState = {schemaVersion: number; nonce: string; instanceId: string; outputs: ReadyOutput[]}
-export interface Media { state(): Promise<MediaState>; prepare(plan: Plan): Promise<string> }
+export type MediaState = {schemaVersion: number; nonce: string; instanceId: string; outputs: ReadyOutput[]; capabilities?:string[]}
+export interface Media { state(): Promise<MediaState>; prepare(plan: Plan): Promise<string>; prepareReady?(plan:Plan,initial:MediaState):Promise<MediaState>; captureUndo?(initial:MediaState):Promise<()=>Promise<void>> }
+export function needsRestore(plan:Plan,state:MediaState):boolean {
+  return state.capabilities?.includes('emergency-restore')===true && plan.paths.some(path=>state.outputs.find(o=>o.slot===path.slot)?.emergencyConfigured!==true)
+}
 export function validatePlan(raw: unknown): Plan {
   const plan = raw as Plan
   if (!plan || plan.schemaVersion !== 1 || typeof plan.name !== 'string' || !plan.name ||
@@ -28,6 +31,7 @@ export function validatePlan(raw: unknown): Plan {
   }
   const atemInputs=plan.paths.filter(p=>p.atemInput!==undefined).map(p=>p.atemInput)
   if(new Set(atemInputs).size!==atemInputs.length)throw new Error('Duplicate ATEM input')
+  if(plan.networkAudioInput!==undefined && (!Number.isSafeInteger(plan.networkAudioInput) || plan.networkAudioInput<1 || plan.networkAudioInput>8))throw new Error('Invalid network ATEM audio input')
   if (new Set(plan.paths.map(path => path.device.toLowerCase())).size !== plan.paths.length) throw new Error('Duplicate device')
   return structuredClone(plan)
 }
@@ -38,7 +42,7 @@ export function readiness(plan: Plan, state: MediaState): string | undefined {
     const matches = state.outputs.filter(output => output.slot === path.slot)
     const output = matches[0]
     if (matches.length !== 1 || !output) return `Output ${path.slot} missing or ambiguous`
-    if (output.backend !== 'hardware' || !output.running || output.health !== 'healthy' || output.fallback ||
+    if (output.emergencyConfigured===false || output.backend !== 'hardware' || !output.running || output.health !== 'healthy' || output.fallback ||
         output.deviceId?.toLowerCase() !== path.device.toLowerCase() || output.source !== path.source ||
         output.format !== '1920x1080p30000/1001' || !age(output.videoAgeMs) || !age(output.scheduleAgeMs) ||
         !Number.isSafeInteger(output.configRevision) || output.configRevision < 1 || !output.committedOperationId)
@@ -108,10 +112,45 @@ export class HttpMedia implements Media {
     if (!result.operationId) throw new Error('Prepare response lacks operation ID')
     return result.operationId
   }
-  async operation(id:string):Promise<{state:string;error?:string}> {
+  async operation(id:string):Promise<{state:string;error?:string;instanceId?:string}> {
     const response=await fetch(new URL(`/api/v1/operations/${encodeURIComponent(id)}`,this.base),{signal:AbortSignal.timeout(1500),cache:'no-store'})
     if(!response.ok)throw new Error('Preparation outcome unavailable; no replay')
-    return await response.json() as {state:string;error?:string}
+    return await response.json() as {state:string;error?:string;instanceId?:string}
+  }
+  private async wait(id:string,host:string):Promise<void> {
+    for(let attempt=0;attempt<400;attempt++) {
+      const operation=await this.operation(id)
+      if(operation.instanceId!==host)throw new Error('Media host changed; preparation outcome unknown, no replay')
+      if(operation.state==='committed')return
+      if(['failed','unknown'].includes(operation.state))throw new Error(operation.error ?? operation.state)
+      await new Promise(resolve=>setTimeout(resolve,500))
+    }
+    throw new Error('Media preparation timed out; no routing or automatic replay')
+  }
+  async prepareReady(plan:Plan,initial:MediaState):Promise<MediaState> {
+    const id=await this.prepare(plan)
+    await this.wait(id,initial.instanceId)
+    const state=await this.state()
+    if(state.instanceId!==initial.instanceId)throw new Error('Media host changed during emergency preparation')
+    const reason=readiness(plan,state)
+    if(reason)throw new Error(reason)
+    return state
+  }
+  async captureUndo(initial:MediaState):Promise<()=>Promise<void>> {
+    const outputs=Object.fromEntries(initial.outputs.map(output=>{
+      const settings=output.settings ?? output.desiredSettings
+      if(!settings)throw new Error(`Output ${output.slot}: cannot capture production settings`)
+      return [String(output.slot),{...structuredClone(settings),device:output.deviceId ?? settings.device}]
+    }))
+    return async()=>{
+      const current=await this.state()
+      if(current.instanceId!==initial.instanceId)throw new Error('Media host changed since the production snapshot; no automatic restore')
+      const expectedWorkers=Object.fromEntries(current.outputs.map(o=>[String(o.slot),{expectedWorkerInstanceId:o.workerInstanceId ?? '',expectedRevision:o.configRevision ?? 0}]))
+      const id=randomUUID()
+      const response=await fetch(new URL('/api/v1/outputs/restore',this.base),{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':id},body:JSON.stringify({schemaVersion:1,expectedInstanceId:current.instanceId,outputs,expectedWorkers}),signal:AbortSignal.timeout(1500)})
+      if(!response.ok)throw new Error(`Production restore rejected: HTTP ${response.status}`)
+      await this.wait(id,current.instanceId)
+    }
   }
 }
 export type Outcome = {id: string; state: 'confirmed' | 'blocked' | 'partial' | 'unknown'; confirmed: number[]; reason: string; target?: 'FIBER' | 'NETWORK'}
@@ -120,7 +159,7 @@ export interface TransitionAudio { prepare(target: 'FIBER' | 'NETWORK'): Promise
 export class Coordinator {
   busy = false
   private ledger = new Map<number, {epoch: number; change: number}>()
-  private undoState?: {routes: Map<number, number>; audio?: PrepareUndoAudio}
+  private undoState?: {routes: Map<number, number>; audio?: PrepareUndoAudio; media?:()=>Promise<void>}
   get canUndo(): boolean { return this.undoState !== undefined }
   constructor(readonly plan: Plan, private hub: Router, private media: Media, private audio?: TransitionAudio) {}
   private preflight(snapshot: HubSnapshot, returning: boolean, observedToggle = false): void {
@@ -147,27 +186,41 @@ export class Coordinator {
     this.busy = true
     let sent = false
     let completedRouting = false
+    let mediaChanged = false
     try {
       const initial = await this.hub.snapshot()
       const mode = routeMode(this.plan, initial)
-      const returning = command === 'return' || (command === 'toggle' && mode === 'NETWORK')
+      let mediaState:MediaState|undefined
+      // Older media adapters can still return to Fiber while offline. New hosts
+      // distinguish a production assignment from a prepared emergency output.
+      if(command==='toggle' && mode==='NETWORK' && this.media.prepareReady) {
+        try{mediaState=await this.media.state()}catch{}
+      }
+      const restore=mediaState ? needsRestore(this.plan,mediaState) : false
+      const returning = command === 'return' || (command === 'toggle' && mode === 'NETWORK' && !restore)
       result.target = returning ? 'FIBER' : 'NETWORK'
       // The toggle is an explicit request to invert the currently read-back
       // group. A deliberate short press overwrites any valid unlocked current
       // routes: NETWORK -> FIBER; every other arrangement -> NETWORK.
       this.preflight(initial, returning, command === 'toggle')
       let expectedRevision = ''
-      if (!returning) {
-        const state = await this.media.state()
-        const reason = readiness(this.plan, state)
-        if (reason) throw new Error(reason)
-        expectedRevision = revisions(this.plan, state)
-      }
       const completeAudio = await this.audio?.prepare(result.target)
-      const undo = {routes: new Map(initial.routes), audio: await this.audio?.captureUndo?.()}
+      if(!returning)mediaState ??= await this.media.state()
+      const restoring=!returning && needsRestore(this.plan,mediaState!) && !!this.media.prepareReady
+      const undo = {routes: new Map(initial.routes), audio: await this.audio?.captureUndo?.(),media:restoring ? await this.media.captureUndo?.(mediaState!) : undefined}
       // Retain one pre-change snapshot even when the ensuing operation is partial.
       // Restoring it always requires a new deliberate three-second hold/release.
-      this.undoState = undo
+      if (!returning) {
+        if(restoring) {
+          this.undoState=undo
+          mediaChanged=true
+          mediaState=await this.media.prepareReady!(this.plan,mediaState!)
+        }
+        const reason=readiness(this.plan,mediaState!)
+        if(reason)throw new Error(reason)
+        expectedRevision=revisions(this.plan,mediaState!)
+      }
+      this.undoState=undo
       for (const path of this.plan.paths) {
         if (!returning) {
           const state = await this.media.state()
@@ -208,7 +261,7 @@ export class Coordinator {
         result.reason += `; ${audioResult}`
       }
     } catch (error) {
-      result.state = sent ? 'unknown' : completedRouting || result.confirmed.length ? 'partial' : 'blocked'
+      result.state = sent || mediaChanged && !result.confirmed.length ? 'unknown' : completedRouting || result.confirmed.length ? 'partial' : 'blocked'
       result.reason = error instanceof Error ? error.message : String(error)
     } finally { this.busy = false }
     return result
@@ -220,6 +273,7 @@ export class Coordinator {
     if (!saved) return {...result, reason: 'No previous change to undo in this module session'}
     this.busy = true
     let sent = false
+    let mediaRestored = false
     try {
       const initial = await this.hub.snapshot()
       const blocked = takeReadiness(this.plan, initial, true)
@@ -229,6 +283,7 @@ export class Coordinator {
         if (!target || target > initial.inputs) throw new Error('Saved undo route is outside the connected router')
       }
       const audio = await saved.audio?.()
+      if(saved.media){sent=true;await saved.media();sent=false;mediaRestored=true;}
       for (const path of this.plan.paths) {
         const fresh = await this.hub.snapshot()
         if (fresh.epoch !== initial.epoch) throw new Error('Videohub reconnected during undo')
@@ -250,10 +305,10 @@ export class Coordinator {
       if (last.epoch !== initial.epoch) {sent = true; throw new Error('Videohub reconnected after undo; outcome unknown')}
       result.confirmed = this.plan.paths.filter(p => last.routes.get(p.destination) === saved.routes.get(p.destination)).map(p => p.slot)
       if (result.confirmed.length !== this.plan.paths.length) throw new Error('Routes changed during undo audio')
-      result.state = 'confirmed'; result.reason = `Previous crosspoints restored; ${audioResult}; physical signal Unknown`
+      result.state = 'confirmed'; result.reason = `Previous crosspoints${saved.media ? ', production outputs' : ''} restored; ${audioResult}; physical signal Unknown`
       this.undoState = undefined; this.ledger.clear()
     } catch (error) {
-      result.state = sent ? 'unknown' : result.confirmed.length ? 'partial' : 'blocked'
+      result.state = sent || mediaRestored && !result.confirmed.length ? 'unknown' : result.confirmed.length ? 'partial' : 'blocked'
       result.reason = error instanceof Error ? error.message : String(error)
     } finally {this.busy = false}
     return result

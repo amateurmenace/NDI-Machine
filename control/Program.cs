@@ -72,6 +72,11 @@ app.MapPost("/api/v1/emergency/prepare", async (HttpContext context, Supervisor 
     return Results.Json(result, statusCode: 202);
 });
 app.MapGet("/api/v1/operations/{id}", (string id, Supervisor supervisor) => supervisor.Operation(id) is { } operation ? Results.Json(operation) : Results.NotFound());
+app.MapPost("/api/v1/outputs/restore",async(HttpContext context,Supervisor supervisor)=>{
+    if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
+    var request=await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Output snapshot required");
+    return Results.Json(supervisor.AcceptRestore(context.Request.Headers["Idempotency-Key"].ToString(),request),statusCode:202);
+});
 var sockets = new SemaphoreSlim(4);
 app.Map("/api/v1/events", async (HttpContext context, Supervisor supervisor) => {
     if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }

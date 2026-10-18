@@ -1,6 +1,6 @@
 # Failover controls in Companion
 
-The custom **ndi-machine 0.3.2** module owns the entire emergency sequence. The connection label is `ndi_machine`. The Director button is currently **1/1/0** and the mirrored XL button is **21/1/1** (page/row/column). Both use **one Companion step**:
+The custom **ndi-machine 0.4.1** module owns the entire emergency sequence. The connection label is `ndi_machine`. The Director button is currently **1/1/0** and the mirrored XL button is **21/1/1** (page/row/column). Both use **one Companion step**:
 
 | Button event | Module action |
 |---|---|
@@ -18,16 +18,16 @@ The independent fixed launcher on localhost port 9861 must be running. `scripts/
 
 ## Toggle and revert
 
-Fresh complete network route readback means the next short press returns to fiber. Every other known, unlocked arrangement takes network, overwriting the four existing destination routes. Unknown ports, locks, stale state, unreachable ATEM/Zoom dependencies or unready network media still block. The button never changes Videohub locks.
+Fresh complete network route readback with emergency media configured means the next short press returns to fiber. Every other known, unlocked arrangement takes network, overwriting the four existing destination routes. Custom production sources, connectors, receiver and audio settings show **RESTORE + TAKE NETWORK**, not BLOCKED. On that explicit press the module preflights audio, snapshots production/video/audio settings, restores emergency outputs, waits for fresh healthy media, then switches the router and audio. Production assignments behind already-selected Network crosspoints also trigger restoration; the following press returns Fiber. Unknown ports, locks, stale state, unreachable ATEM/Zoom dependencies or failed preparation still prevent unconfirmed switching. The button never changes Videohub locks.
 
 | Direction | Videohub inputs → outputs 33/34/35/36 | Existing Zoom button | ATEM input audio ON |
 |---|---|---|---|
-| Network | Commissioned backup path for each destination | ZOOM DANTE, **1/1/2** | The explicit `atemInput` of the single `audioMode: fixed` path |
+| Network | 6/7/8/5, retained at operator request | ZOOM DANTE, **1/1/2** | **Input 3 only** |
 | Fiber | 9/10/11/12 | ZOOM MADI, **1/1/1** | XLR + MADI 1/2 + 3/4 |
 
-All other ATEM input audio is Off. Master, gains, processing and channel splits are untouched. The media failover preset embeds Dante USB receive 1/2 **only on SDI output 1**; outputs 2–4 are silent. Version 0.3.2 derives the enabled ATEM input from that path's explicit `atemInput`, rather than assuming slot number equals ATEM channel. The plan must declare exactly one fixed-audio path and mark other paths silent; missing/ambiguous audio mapping is rejected. The control host exports `atemInput` from local commissioning. The plan's per-path `audioMode` must match fresh committed worker state. Verify the physical DeckLink → Videohub input and Videohub destination → ATEM input cabling; software readback cannot detect mispatched cables. `network_audio_input` exposes the selected ATEM channel.
+All other ATEM input audio is Off. Master, gains, processing and channel splits are untouched. The media failover preset embeds Dante USB receive 1/2 **only on SDI output 1**; outputs 2–4 are silent. The operator confirmed that audio arrives at ATEM Input 3 and requested keeping the video map. Local `audio.networkAtemInput: 3` exports `networkAudioInput: 3` in the plan, independently of video paths. Without that explicit audio destination the single fixed-audio path's `atemInput` is used. Exactly one fixed-audio path and explicit silence on all others are required. Software readback cannot prove cabling or lip-sync. `network_audio_input` exposes the chosen ATEM audio channel.
 
-Before the first write, the module saves the exact previous four crosspoints, full ATEM input mix options (including AFV) and known Zoom selection. **Hold three seconds then release** restores that snapshot, rather than assuming the old state was Fiber. The snapshot also remains available after a partial change. It is memory-only and is cleared by module restart/configuration changes. No snapshot means no undo. Zoom restoration invokes the previous canonical Zoom button; it does not restore unrelated arbitrary X32 state.
+Before the first write, the module saves the exact previous four crosspoints, full ATEM input mix options (including AFV) and known Zoom selection. When production media is taken over, it also saves each slot's actual source, connector, receiver and audio settings. **Hold three seconds then release** restores that snapshot. The snapshot remains available after a partial change. It is memory-only and is cleared by module restart/configuration changes. No snapshot means no undo. Production restoration requires the same control-host session and current worker revisions; a host replacement produces an explicit failure. Zoom restoration invokes the previous canonical Zoom button; it does not restore unrelated arbitrary X32 state.
 
 Both directions preflight hardware, verify every video route, then invoke the existing Zoom button and apply/verify the ATEM mix. HTTP success confirms Zoom dispatch, not downstream completion; retain its existing device feedback. Changes during the operation abort further writes. Partial/unknown results never automatically roll back or replay. Returning to fiber remains available when backup media is offline; taking network always requires ready media, including from mixed routes.
 

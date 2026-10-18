@@ -56,6 +56,11 @@ public sealed class Commission
         var atemInputs=paths.Where(p=>p!["atemInput"]!=null).Select(p=>p!["atemInput"]!.GetValue<int>()).ToArray();
         if(atemInputs.Distinct().Count()!=atemInputs.Length)throw new InvalidDataException("Duplicate commissioned ATEM input");
         Plan = new() { ["schemaVersion"] = 1, ["name"] = "Fiber to Network", ["audioEndpointId"] = Endpoint, ["paths"] = paths };
+        if(audio["networkAtemInput"] is JsonNode networkInput) {
+            if(networkInput.GetValue<int>() is <1 or >8 || Outputs.Count(o=>o.AudioMode=="fixed")!=1)
+                throw new InvalidDataException("An explicit network ATEM audio input requires one fixed-audio output and input 1 through 8");
+            Plan["networkAudioInput"]=networkInput.DeepClone();
+        }
     }
     public void ValidatePlan(JsonObject candidate)
     {

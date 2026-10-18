@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
-import { Coordinator, readiness, routeMode, takeReadiness, toggleReadiness, validatePlan, type Media, type MediaState, type Plan } from '../coordinator.js'
+import { Coordinator, needsRestore, readiness, routeMode, takeReadiness, toggleReadiness, validatePlan, type Media, type MediaState, type Plan } from '../coordinator.js'
 import type { HubSnapshot, Router } from '../videohub.js'
 const plan: Plan = {schemaVersion: 1, name: 'test plan', audioEndpointId: 'usb-test', paths: [
   {slot: 1, destination: 33, normalInput: 9, backupInput: 8, device: '0xa1', source: 'Cam 1'},
@@ -266,4 +266,52 @@ test('toggle return blocks a reconnect between decision and write', async () => 
   hub.snapshot = async () => { if (++calls === 2) ++hub.epoch; return snapshot() }
   const result = await new Coordinator(plan, hub, media()).toggle()
   assert.equal(result.state, 'blocked'); assert.deepEqual(hub.writes, [])
+})
+
+function productionMedia(onPrepare?:()=>void) {
+  let state=readyState();state.capabilities=['emergency-restore']
+  state.outputs.forEach(o=>{o.source='Production camera';o.emergencyConfigured=false})
+  let prepared=0,undone=0
+  const adapter:Media={state:async()=>structuredClone(state),prepare:async()=>{throw new Error('Unobserved preparation')},
+    captureUndo:async(initial)=>async()=>{state=structuredClone(initial);undone++},
+    prepareReady:async()=>{prepared++;onPrepare?.();state=readyState();state.capabilities=['emergency-restore'];state.outputs.forEach(o=>o.emergencyConfigured=true);return structuredClone(state)}}
+  return {adapter,counts:()=>({prepared,undone})}
+}
+test('production assignments are restored on explicit take; undo restores their settings as well as arbitrary routes',async()=>{
+  const hub=new FakeHub();hub.manual(33,22)
+  const media=productionMedia();const coordinator=new Coordinator(plan,hub,media.adapter)
+  assert.equal(needsRestore(plan,await media.adapter.state()),true)
+  assert.deepEqual(media.counts(),{prepared:0,undone:0})
+  assert.equal((await coordinator.toggle()).state,'confirmed')
+  assert.equal(needsRestore(plan,await media.adapter.state()),false)
+  assert.equal((await coordinator.undo()).state,'confirmed')
+  assert.equal(needsRestore(plan,await media.adapter.state()),true)
+  assert.deepEqual([...hub.routes],[[33,22],[34,10]])
+  assert.deepEqual(media.counts(),{prepared:1,undone:1})
+})
+test('production outputs behind existing network crosspoints are taken over, not mistaken for a Fiber return',async()=>{
+  const hub=new FakeHub();hub.manual(33,8);hub.manual(34,6)
+  const media=productionMedia();const coordinator=new Coordinator(plan,hub,media.adapter)
+  const first=await coordinator.toggle();assert.equal(first.state,'confirmed');assert.equal(first.target,'NETWORK')
+  assert.equal(hub.writes.length,0);assert.equal(media.counts().prepared,1)
+  const second=await coordinator.toggle();assert.equal(second.target,'FIBER');assert.equal(second.state,'confirmed')
+  assert.equal(media.counts().prepared,1)
+})
+test('failed production restoration is never replayed and never switches video or audio',async()=>{
+  const hub=new FakeHub();const media=productionMedia(()=>{throw new Error('Preparation failed')});let audioWrites=0
+  const coordinator=new Coordinator(plan,hub,media.adapter,{prepare:async()=>async()=>{audioWrites++;return 'audio'}})
+  const result=await coordinator.toggle();assert.equal(result.state,'unknown');assert.match(result.reason,/Preparation failed/)
+  assert.equal(hub.writes.length,0);assert.equal(audioWrites,0);assert.equal(media.counts().prepared,1);assert.equal(coordinator.canUndo,true)
+})
+test('audio preflight failure preserves production and manual route changes during restore abort the take',async()=>{
+  const hub=new FakeHub();const media=productionMedia(()=>hub.manual(34,22))
+  const blocked=new Coordinator(plan,hub,media.adapter,{prepare:async()=>{throw new Error('ATEM unavailable')}})
+  assert.equal((await blocked.toggle()).state,'blocked');assert.equal(media.counts().prepared,0)
+  const result=await new Coordinator(plan,hub,media.adapter).toggle()
+  assert.equal(result.state,'unknown');assert.match(result.reason,/changed or locked/);assert.equal(hub.writes.length,0)
+})
+test('restored media still must be healthy and exactly configured before routing',async()=>{
+  const hub=new FakeHub();const media=productionMedia();const original=media.adapter.prepareReady!
+  media.adapter.prepareReady=async(p,s)=>{const result=await original(p,s);result.outputs[0].videoAgeMs=501;return result}
+  assert.equal((await new Coordinator(plan,hub,media.adapter).toggle()).state,'unknown');assert.equal(hub.writes.length,0)
 })

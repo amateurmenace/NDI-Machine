@@ -1,4 +1,4 @@
-# Development status — 0.3.2
+# Development status — 0.4.0
 
 This is a working engineering build, not a physically qualified broadcast release. Historical evidence is in MEDIA-PROOF.md, CONTROL-PROOF.md and SDK-UPDATE.md; this page describes the current scope.
 
@@ -9,16 +9,17 @@ This is a working engineering build, not a physically qualified broadcast releas
 - Windows capture and playback-loopback audio, selected NDI audio or silence; independent stereo channels, gain, mute and 0-500 ms audio delay. Shared capture readers adapt to the SDI clock. No device-default changes.
 - Previews reuse decoded output through local shared memory at 320x180 and at most 4 fps, without another NDI receiver. Input/SDI counters, receiver queues/drops, peak meters, clipping, buffer occupancy and clock correction are exposed.
 - Manual external-IP/group discovery, source inventory, local diagnostics and persisted per-output intent. Existing custom workers survive host upgrades; explicit Apply/Prepare performs changes, missing workers recover with bounded backoff.
-- Companion 0.3.2: short-release Fiber/Network toggle overwrites known unlocked routes; hold at least three seconds and release restores preceding routes, ATEM mix and known Zoom selection. Undo is session-only. Reconnect never writes or replays.
+- Separate Production/Failover views, persisted locally. Production shows actual output health and provides ordinary NDI/DeckLink/audio routing without polling Companion. Mode selection changes no media.
+- Companion 0.4.1: an explicit short release restores emergency media over custom production assignments, verifies readiness and takes Network over known unlocked routes. Hold three seconds and release restores preceding production settings, routes, ATEM mix and known Zoom selection. Undo is session-only. Reconnect never writes or replays. The updated control host is required for automatic production takeover.
 - Network invokes ZOOM DANTE and enables the explicitly commissioned ATEM input receiving the one audio-bearing path. Fiber invokes ZOOM MADI and enables only XLR + MADI 1/2 + 3/4. Gains, master and processing are unchanged. The module owns the sequence behind the button's Down/Up actions.
 
-The commissioned preset now embeds Dante USB I/O Module receive 1/2 on **output 1 only**, with outputs **2-4 silent**. The stored network input map **6/7/8/5** to Videohub destinations **33/34/35/36** is disputed by the latest physical observation below; fiber is **9/10/11/12**. Director failover is **1/1/0**, XL **21/1/1**; Zoom DANTE **1/1/2**, MADI **1/1/1**.
+The commissioned preset embeds Dante USB I/O Module receive 1/2 on **output 1 only**, with outputs **2-4 silent**. The operator confirmed that audio reaches **ATEM Input 3** and explicitly requested retaining video input map **6/7/8/5** to destinations **33/34/35/36**. `audio.networkAtemInput: 3` configures the audio destination independently of the video paths. Fiber remains **9/10/11/12**. Director failover is **1/1/0**, XL **21/1/1**; Zoom DANTE **1/1/2**, MADI **1/1/1**.
 
 ## Validation
 
 - Native CTest: **5/5** (read-only SDK inventory, media arithmetic/queues, audio bridge, previews and output settings/conversion/delay).
-- Control/desktop simulated tests: **25/25**, including failed prepare, revision/epoch races, displayed-state confirmation, no replay after lost ACK, reserved/busy/duplicate hardware, silent readiness and preservation of custom outputs.
-- Companion tests: **43/43**; package smoke import succeeds under the installed Node 26 permission model without connecting to hardware.
+- Control/desktop simulated tests: **28/28**, including failed prepare, revision/epoch races, displayed-state confirmation, no replay after lost ACK, reserved/busy/duplicate hardware, silent readiness and preservation of custom outputs.
+- Companion tests: **51/51**; package smoke import succeeds under the installed Node 26 permission model without connecting to hardware.
 - Actual WPF visual-tree rendering verified dashboard and editor layout. This is an application render, not a physical output test.
 - New keyed Dante USB capture path delivered 144960 frames in three seconds, nonzero samples and no timestamp/nonfinite errors. Multichannel and alternate-rate devices have not been qualified.
 - All four upgraded workers are active with previews. Fresh snapshots show zero SDI late/dropped/fallback frames. Output 1 has nonzero USB samples; outputs 2-4 report silent/muted with zero peaks. Worker identities survived the subsequent GUI/control restart. Physical signal and lip-sync remain unqualified.
@@ -30,7 +31,11 @@ After the operator stopped the previously blocked old host, all four workers wer
 
 Discovery fixes found 18 sources in the initial query and 19 as the network changed. The installed GUI reports 19; sources refresh automatically on connection and when opening an editor. SDK-provided vendor HX addresses are accepted. The existing four workers remain healthy. Regressions fixed repeated state reads attempting to reuse a parented JSON node and native `0.0` versus managed `0` causing false settings mismatches.
 
-During operator testing, the audio-bearing AUD CAM 1 feed appeared on ATEM Input 3 despite the saved plan expecting Input 1. The saved physical map is therefore not yet requalified. Version 0.3.2 is built in staging: it carries explicit `atemInput` through commissioning and derives Network audio from the single fixed-audio path. Tests cover Input 3, exact undo, Fiber restoration and rejection of ambiguous mapping. Deployment of this mapping change awaits the operator's four-camera observations; do not claim the current physical/audio map is correct. The previous network map 6/7/8/5 is historical pending correction.
+The operator subsequently confirmed Input 3 and requested leaving video routing unchanged. GUI 0.4.0 is now open in Production mode; Companion 0.4.1 is installed with `networkAudioInput: 3` and both buttons retain Down/Up actions. Read-only hardware observation found Fiber crosspoints 9/10/11/12 and only XLR + MADI 1/2 + 3/4 ON. No router or ATEM audio write was made for this update.
+
+The new control host is built in `dist/NDI Machine-0.4.0-staging`. Automatic approval review rejected the command that included stopping old control-host PID 20992, reporting only `blocked by policy`. The operator has been asked to stop that host manually. Until replacement, the live host is still 0.3.1 and automatic production takeover is **not active**. Four workers are unchanged and healthy. On activation, preserve their settings and epochs, update the local audio destination, and migrate the saved intent fingerprint for that metadata-only configuration change. Do not claim full activation until fresh state advertises `emergency-restore`.
+
+Current automated validation: desktop/control **28/28**, Companion **51/51**, including connector-cycle ownership checks, production takeover and undo, stale worker/host protection, Input 3 selection and no retry after lost acknowledgements. Native media code is unchanged from the previous **5/5** run. The actual WPF Production view was rendered and inspected using live telemetry; this is an application render, not a desktop screenshot. Live connector-cycle takeover and physical listening remain untested.
 
 Companion's installed Down/Up actions and four feedbacks were restored. Full-layout reset/imports were logged at 16:42:22, 16:50:56, 16:52:18 and 17:14:04 local on 2026-10-18. The latest import retained the repaired bindings. The log does not identify the initiating client. A secret-excluded backup is saved privately; verify actions after future imports.
 
