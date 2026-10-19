@@ -79,6 +79,20 @@ internal static class ConfigurationChecks
         File.WriteAllText(path,"""{"schemaVersion":1,"audio":{"endpointId":"usb","policy":"fixed","backend":"wasapi","channels":[1,2],"calibration":"unity"},"outputs":[{"slot":1,"device":"0x123","source":"Camera A","audioMode":"silent"}],"videohub":{"paths":[{"slot":1,"destination":33,"normalInput":9,"backupInput":6}]}}""");
         try {
             var commission=new Commission(path,root);
+            await test("emergency preparation passes idle and mixed-output preflight without numeric conversion errors",async()=>{
+                foreach(var existing in new[]{false,true}) {
+                    var pipe=new GroupPreflightPipe(existing);
+                    var manager=new OutputManager(commission,pipe,new FakeInventory(true));
+                    var second=Settings("Camera B");second["device"]="0x456";
+                    var reachedLaunch=false;
+                    try {
+                        await manager.ApplyGroup(new Dictionary<int,JsonObject>{{1,Settings()},{2,second}},null,()=>{
+                            reachedLaunch=true;throw new OperationCanceledException("Test stops before any native process launch");
+                        },default);
+                    }catch(OperationCanceledException)when(reachedLaunch){}
+                    Require(reachedLaunch && pipe.Commands==0 && pipe.Reads>=5);
+                }
+            });
             await test("simultaneous discovery readers share one scan and receive independent results",async()=>{
                 var scans=0;var release=new TaskCompletionSource();
                 var discovery=new Discovery(commission,async(_,token)=>{scans++;await release.Task.WaitAsync(token);return new JsonObject{["sources"]=new JsonArray()};});
@@ -163,8 +177,17 @@ internal static class ConfigurationChecks
             });
         }finally{File.Delete(path);Directory.Delete(root);}
     }
-    private sealed class FakeInventory:IInventory {
-        public Task<JsonObject> Get(CancellationToken token)=>Task.FromResult(JsonNode.Parse("""{"decklink":{"devices":[{"persistentId":"0x123","deviceGroupId":"0x100","supports1080p2997Uyvy":true,"busyFlags":0}]},"audio":[]}""")!.AsObject());
+    private sealed class FakeInventory(bool second=false):IInventory {
+        public Task<JsonObject> Get(CancellationToken token){
+            var result=JsonNode.Parse("""{"decklink":{"devices":[{"persistentId":"0x123","deviceGroupId":"0x100","supports1080p2997Uyvy":true,"busyFlags":0}]},"audio":[]}""")!.AsObject();
+            if(second){var device=result["decklink"]!["devices"]![0]!.DeepClone();device["persistentId"]="0x456";result["decklink"]!["devices"]!.AsArray().Add(device);}
+            return Task.FromResult(result);
+        }
+    }
+    private sealed class GroupPreflightPipe(bool existing):IWorkerPipe {
+        public int Reads,Commands;
+        public Task<JsonObject> State(int slot,CancellationToken cancellation=default){Reads++;return existing && slot==1 ? Task.FromResult(new JsonObject{["state"]=new ConfigurationPipe().Snapshot()}) : Task.FromException<JsonObject>(new IOException("Idle output"));}
+        public Task<JsonObject> Call(string pipe,JsonObject request,int timeoutMs=700,CancellationToken cancellation=default){Commands++;throw new Exception("No media commands expected during test preflight");}
     }
     private sealed class ConfigurationPipe:IWorkerPipe {
         public JsonObject Current=Settings();private JsonObject? candidate;

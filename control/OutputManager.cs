@@ -93,7 +93,9 @@ public sealed class OutputManager(Commission commission, IWorkerPipe pipes, IInv
         }
         foreach(var pair in targets) await Apply(pair.Key,pair.Value,release.Contains(pair.Key)?Expected(null):Expected(states[pair.Key]),true,sent,token);
     }
-    private static JsonObject Expected(JsonObject? state)=>new(){["expectedWorkerInstanceId"]=state?["workerInstanceId"]?.DeepClone() ?? JsonValue.Create(""),["expectedRevision"]=state?["configRevision"]?.DeepClone() ?? JsonValue.Create(0)};
+    // Locally created JSON values keep their CLR numeric type. Idle revision
+    // zero must match the Int64 revision reader just like a parsed worker reply.
+    private static JsonObject Expected(JsonObject? state)=>new(){["expectedWorkerInstanceId"]=state?["workerInstanceId"]?.DeepClone() ?? JsonValue.Create(""),["expectedRevision"]=state?["configRevision"]?.DeepClone() ?? JsonValue.Create(0L)};
     public async Task Stop(int slot,JsonObject expected,Action sent,CancellationToken token) {
         var state=await State(slot,token);CheckExpected(state,expected);
         if(state==null) {

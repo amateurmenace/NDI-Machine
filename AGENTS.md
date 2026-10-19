@@ -2,6 +2,8 @@
 
 ## Current verified state, 2026-10-18 evening — 0.5.2
 
+Control hotfix 0.5.3 is built/tested but pending activation: the operator's failover attempt failed before media writes because idle group snapshots created Int32 revision zero and the guard read Int64. `Expected(null)` now emits 0L. A regression reproduces the exact exception before the fix and passes all-idle/mixed preflight after it; control/desktop 37/37. Automatic approval review rejected replacing the control host with only `blocked by policy`; the operator was asked to stop freshly verified PID 646312. Never reuse that PID without rechecking. `scripts/Install-Control-053.ps1` then refuses any running control host and installs the tested control-only build without terminating processes or writing routes. GUI/Companion remain 0.5.2. Do not claim the live emergency sequence passed until operator testing.
+
 This section supersedes historical activation and Input 3 audio notes below. Recheck live state before actions; the operator is actively testing and changing routes/senders.
 
 - GUI/control/launcher 0.5.2 are installed in `dist/NDI Machine-0.5.2`; the desktop shortcut, current-user launcher registration and copied `A:\NDI Machine.exe` point to or match that package. Companion 0.5.2 is installed in the existing ndi_machine connection. Activation preserved the current media worker; never reuse historical PIDs or replay activation scripts casually.

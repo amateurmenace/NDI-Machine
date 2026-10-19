@@ -2,6 +2,12 @@
 
 This engineering build is installed on the commissioned workstation. Source delivery excludes proprietary SDKs, binaries, private commissioning and diagnostic captures. Historical media evidence is in MEDIA-PROOF.md and CONTROL-PROOF.md. Software checks do not establish physical broadcast qualification.
 
+## Pending control hotfix — 0.5.3
+
+An operator failover attempt exposed a numeric-type bug in group preparation when any receiver is idle: local revision zero was Int32, while the expected-revision guard reads Int64. Preparation failed before media writes. The corrected value is Int64; a regression reproduced the original exception and now passes both all-idle and mixed-running preflight. Control/desktop checks pass **37/37**. Native and Companion code are unchanged.
+
+The control-only 0.5.3 build is staged. Automatic approval review rejected the attempted host replacement with “blocked by policy”; activation awaits the operator stopping the verified old host. `scripts/Install-Control-053.ps1` refuses a running host and installs/starts only the corrected engine. GUI and Companion remain 0.5.2. Live failover retry is not yet verified.
+
 ## Current behavior
 
 - Self-contained Windows x64 WPF EXE, local control host and independent native media workers. Closing the GUI preserves running streams. Cold host startup starts no receivers; Apply or PRIME explicitly starts them. Stop source and Engine controls release receivers and support an idle engine restart.
