@@ -94,6 +94,21 @@ public sealed class OutputManager(Commission commission, IWorkerPipe pipes, IInv
         foreach(var pair in targets) await Apply(pair.Key,pair.Value,release.Contains(pair.Key)?Expected(null):Expected(states[pair.Key]),true,sent,token);
     }
     private static JsonObject Expected(JsonObject? state)=>new(){["expectedWorkerInstanceId"]=state?["workerInstanceId"]?.DeepClone() ?? JsonValue.Create(""),["expectedRevision"]=state?["configRevision"]?.DeepClone() ?? JsonValue.Create(0)};
+    public async Task Stop(int slot,JsonObject expected,Action sent,CancellationToken token) {
+        var state=await State(slot,token);CheckExpected(state,expected);
+        if(state==null) {
+            if(!Ownable($"Global\\NDIMachine.slot.{slot}"))throw new InvalidOperationException("Output owner is unresponsive; cannot confirm stopped");
+            return;
+        }
+        if(state["backend"]?.GetValue<string>()!="hardware")throw new InvalidOperationException("Identified hardware worker required");
+        sent();
+        await pipes.Call($"NDIMachine.output.{slot}.v1",new(){["method"]="stop"},2000,token);
+        var timer=Stopwatch.StartNew();
+        while(!Ownable($"Global\\NDIMachine.slot.{slot}")) {
+            if(timer.ElapsedMilliseconds>5000)throw new InvalidOperationException("Output did not stop; no forced termination");
+            await Task.Delay(50,token);
+        }
+    }
     public async Task Apply(int slot,JsonObject settings,JsonObject? expected,bool deliberate,Action sent,CancellationToken token) {
         var initial=await State(slot,token);
         if(expected!=null) CheckExpected(initial,expected);

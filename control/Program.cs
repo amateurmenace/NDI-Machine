@@ -21,6 +21,7 @@ builder.Services.AddSingleton<WorkerPipe>();
 builder.Services.AddSingleton<IWorkerPipe>(provider => provider.GetRequiredService<WorkerPipe>());
 builder.Services.AddSingleton<Discovery>();
 builder.Services.AddSingleton<Inventory>();
+builder.Services.AddSingleton<AtemRemote>();
 builder.Services.AddSingleton<Supervisor>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<Supervisor>());
 var app = builder.Build();
@@ -44,6 +45,11 @@ app.MapGet("/api/v1/state", async (HttpContext context, Supervisor supervisor) =
     return Results.Json(await supervisor.State(nonce, context.RequestAborted));
 });
 app.MapGet("/api/v1/commission", () => Results.Json(commission.Plan));
+app.MapPost("/api/v1/atem",async(HttpContext context,AtemRemote atem)=>{
+    if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
+    var request=await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("ATEM request required");
+    return Results.Json(await atem.Call(request,context.RequestAborted));
+});
 app.MapGet("/api/v1/sources", async (Discovery discovery, HttpContext context) => Results.Json(await discovery.Get(context.RequestAborted)));
 app.MapGet("/api/v1/inventory", async (Inventory inventory,HttpContext context) => Results.Json(await inventory.Get(context.RequestAborted)));
 app.MapGet("/api/v1/discovery", (Discovery discovery)=>Results.Json(discovery.Settings()));
@@ -72,10 +78,28 @@ app.MapPost("/api/v1/emergency/prepare", async (HttpContext context, Supervisor 
     return Results.Json(result, statusCode: 202);
 });
 app.MapGet("/api/v1/operations/{id}", (string id, Supervisor supervisor) => supervisor.Operation(id) is { } operation ? Results.Json(operation) : Results.NotFound());
+app.MapPost("/api/v1/outputs/{slot:int}/stop",async(int slot,HttpContext context,Supervisor supervisor)=>{
+    if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
+    var request=await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Expected state required");
+    if(request["slot"]?.GetValue<int>()!=slot)return Results.BadRequest(new{error="Output path and body differ"});
+    return Results.Json(supervisor.AcceptStop(context.Request.Headers["Idempotency-Key"].ToString(),request),statusCode:202);
+});
 app.MapPost("/api/v1/outputs/restore",async(HttpContext context,Supervisor supervisor)=>{
     if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
     var request=await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Output snapshot required");
     return Results.Json(supervisor.AcceptRestore(context.Request.Headers["Idempotency-Key"].ToString(),request),statusCode:202);
+});
+app.MapPost("/api/v1/outputs/stop",async(HttpContext context,Supervisor supervisor)=>{
+    if(!context.Request.HasJsonContentType())return Results.StatusCode(415);
+    var request=await context.Request.ReadFromJsonAsync<JsonObject>() ?? throw new InvalidDataException("Expected workers required");
+    return Results.Json(supervisor.AcceptStopAll(context.Request.Headers["Idempotency-Key"].ToString(),request),statusCode:202);
+});
+app.MapPost("/api/v1/lifecycle/stop",async(HttpContext context,Supervisor supervisor,IHostApplicationLifetime lifetime)=>{
+    var state=await supervisor.State("shutdown-check",context.RequestAborted);
+    if(state["pendingOperationId"]!=null || state["outputs"]!.AsArray().Any(o=>o?["running"]?.GetValue<bool>()==true))
+        return Results.Conflict(new{error="Stop all sources and wait for confirmation before stopping the engine"});
+    context.Response.OnCompleted(()=>{lifetime.StopApplication();return Task.CompletedTask;});
+    return Results.Json(new{accepted=true});
 });
 var sockets = new SemaphoreSlim(4);
 app.Map("/api/v1/events", async (HttpContext context, Supervisor supervisor) => {

@@ -22,7 +22,7 @@ try {
   if($LASTEXITCODE){throw 'Launcher publish failed'}
   $native=Join-Path $package 'build\Release'
   New-Item -ItemType Directory -Force -Path $native,(Join-Path $package 'config'),(Join-Path $package 'notices') | Out-Null
-  foreach($name in @('audio-host.exe','media-worker.exe','ndi-probe.exe','decklink-sdk-check.exe')) {
+  foreach($name in @('audio-host.exe','media-worker.exe','ndi-probe.exe','decklink-sdk-check.exe','atem-remote.exe')) {
     $source=Join-Path (Join-Path $root $NativeBuildDirectory) $name
     if(!(Test-Path -LiteralPath $source)){throw ('Build native prerequisites first: '+$source)}
     Copy-Item -LiteralPath $source -Destination $native

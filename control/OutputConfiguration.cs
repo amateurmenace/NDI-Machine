@@ -26,6 +26,7 @@ public static class OutputConfiguration
         if (Text("bandwidth") is not ("highest" or "lowest") || Text("sizing") is not ("fit" or "fill" or "stretch") ||
             Text("audioMode") is not ("fixed" or "ndi" or "silent")) throw new InvalidDataException("Invalid receiver or audio mode");
         var url = Text("sourceUrl");
+        if(Regex.IsMatch(url,@":5353$"))throw new InvalidDataException("Port 5353 is NDI discovery, not a media address. Refresh sources and choose the sender, or leave its address blank for discovery.");
         // The SDK finder also returns vendor HX transport identifiers. Preserve
         // those exact addresses; they are not HTTP URLs or file paths.
         var transport=Regex.IsMatch(url,"^ndi-hx-[a-z0-9-]+://",RegexOptions.IgnoreCase) ? url : "ndi://"+url;

@@ -21,8 +21,18 @@ public sealed class OutputModel(int slot) : Observable
         Preview = image; PreviewCaption = caption; Changed();
     }
     public int Slot { get; } = slot;
-    public string Number => Slot.ToString("00");
+    public int AtemInput {get;private set;}
+    private int hubInput;
+    public string Number => (AtemInput>0?AtemInput:Slot).ToString("00");
     public string Name => $"NDI Machine {Slot}";
+    public string Title=>AtemInput>0?$"ATEM Input {AtemInput}":Name;
+    public string Connector=>hubInput>0?$"{Name} · Videohub input {hubInput}":Device;
+    public string LiveRouting {get;private set;}="Live ATEM route unavailable";
+    public void SetRouting(JsonObject? mapping) {
+        if(mapping!=null){AtemInput=mapping["atemInput"]?.GetValue<int>() ?? 0;hubInput=mapping["hubInput"]?.GetValue<int>() ?? 0;}
+        LiveRouting=mapping?["destinations"] is JsonArray destinations ? destinations.Count>0 ? "LIVE → ATEM "+string.Join(", ",destinations.Select(n=>n!.ToString())) : "Not currently routed to an ATEM input" : "Live ATEM route unavailable";
+        Changed();
+    }
     public JsonObject? State { get; private set; }
     public JsonObject? Path { get; private set; }
     public bool Fresh { get; private set; }
@@ -30,7 +40,9 @@ public sealed class OutputModel(int slot) : Observable
     private string selectedSource = "";
     public string SelectedSource { get => selectedSource; set { selectedSource = value; Changed(); } }
     public ObservableCollection<string> Sources { get; } = new();
-    public string Source => Text(State, "source", "Waiting for worker");
+    public bool Running=>State?["running"]?.GetValue<bool>()==true;
+    public bool CanStop=>Fresh && CanRoute && Running;
+    public string Source => Running ? Text(State, "source", "Unknown source") : "No source · idle";
     public string ExpectedSource => Text(Path, "source", "Not commissioned");
     public string Device => Text(State, "deviceId", Text(Path, "device", "Unassigned"));
     public string Format => Text(State, "format") == "1920x1080p30000/1001" ? "1080p 29.97  /  UYVY" : Text(State, "format", "Format unknown");
@@ -45,7 +57,7 @@ public sealed class OutputModel(int slot) : Observable
             Text(State?["audio"] as JsonObject,"mode")=="silent" && State?["audio"]?["muted"]?.GetValue<bool>()==true :
             AudioFresh && Text(State?["audio"] as JsonObject,"endpointId").Equals(endpoint,StringComparison.OrdinalIgnoreCase) &&
             Text(State?["audio"] as JsonObject,"mode")=="fixed" && State?["audio"]?["channels"]?.ToJsonString()=="[1,2]");
-    public string Status => !Fresh ? "STALE" : SoftwareHealthy ? "RUNNING" : State?["fallback"]?.GetValue<bool>() == true ? "FALLBACK" : "NOT READY";
+    public string Status => !Fresh ? "STALE" : !Running ? "IDLE" : SoftwareHealthy ? "RUNNING" : State?["fallback"]?.GetValue<bool>() == true ? "FALLBACK" : "NOT READY";
     public string StatusColor => !Fresh ? "#A3B1C1" : SoftwareHealthy ? "#7DE1CC" : "#F6BD75";
     public string AudioStatus => !Fresh ? "Audio unknown" : Text(State?["audio"] as JsonObject,"mode")=="silent" ? "Audio · silent" : State?["audio"]?["muted"]?.GetValue<bool>()==true ? "Audio · muted" : AudioFresh ? Text(State?["audio"] as JsonObject,"mode")=="ndi" ? "NDI audio · fresh" : "Windows audio · fresh" : "Audio not ready";
     private double receiveFps;
@@ -81,8 +93,8 @@ public sealed class OutputModel(int slot) : Observable
         else receiveFps=0;
         previousReceived=received;previousSample=stamp;
         State = state; Path = path; Fresh = fresh; CanRoute = canRoute;
-        if (selectedSource.Length == 0 && state != null) selectedSource = Source;
-        AddSource(ExpectedSource); if (state != null) AddSource(Source);
+        if (selectedSource.Length == 0 && Running) selectedSource = Source;
+        if (Running) AddSource(Source);
         Changed();
     }
     public void AddSource(string value) { if (value.Length > 0 && value is not "Not commissioned" and not "Waiting for worker" && !Sources.Contains(value)) Sources.Add(value); }
@@ -109,7 +121,18 @@ public sealed class DashboardModel : Observable
             return paths?.Length==1 && input!=null ? $"ZOOM DANTE · ATEM Input {input} only" : "ZOOM DANTE · audio destination needs commissioning";
         }
     }
+    public string PresetAudioSummary {
+        get {
+            var paths=(Plan?["paths"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
+            var active=paths.Where(p=>OutputModel.Text(p,"audioMode")=="fixed").Select(p=>OutputModel.NumberAt(p,"slot")).ToArray();
+            return active.Length==1 ? $"Receive 1/2 → NDI Machine {active[0]}\nOther failover outputs → silent\nCustom audio is available in each output editor." : "Audio assignment needs commissioning";
+        }
+    }
+    public string ReceiverSummary=>!Connected ? "Connect to inspect running outputs. Opening this window never starts receivers." :
+        Outputs.Any(o=>o.Running) ? $"{Outputs.Count(o=>o.Running)} receivers running in the background. Closing or reopening this window keeps them running. Use Stop source or Engine controls to release them." :
+        "No receivers running. Choose a source and Apply, or press PRIME to load the emergency preset.";
     private long received;
+    private bool retainNotice;
     public bool Connected { get; private set; }
     public bool Busy { get; private set; }
     public bool Offline => !Connected;
@@ -128,18 +151,26 @@ public sealed class DashboardModel : Observable
     public string Readiness => $"{Outputs.Count(o => ProductionMode ? o.SoftwareHealthy : o.PlanReady(OutputModel.Text(Plan, "audioEndpointId")))} / {(Plan?["paths"] is JsonArray paths ? paths.Count : 4)}";
     public string ReadyCaption => !Connected ? "READINESS UNKNOWN" : ProductionMode ? "OUTPUTS RUNNING" : "BACKUPS MATCHING PLAN";
     public string AudioCaption=>ProductionMode ? "OUTPUT AUDIO" : "DANTE USB AUDIO";
-    public string AudioSummary => !Connected ? "Unknown" : ProductionMode ? $"{Outputs.Count(o=>o.AudioFresh)} active / {Outputs.Count(o=>OutputModel.Text(o.State?["audio"] as JsonObject,"mode")=="silent")} silent" : Outputs[0].AudioFresh ? "Output 1 ready" : "Needs attention";
-    public string Armed => !Connected ? "Unknown" : State?["armed"]?.GetValue<bool>() == true ? "Armed" : "Not armed";
+    public string AudioSummary => !Connected ? "Unknown" : ProductionMode ? $"{Outputs.Count(o=>o.AudioFresh)} active / {Outputs.Count(o=>o.Running && OutputModel.Text(o.State?["audio"] as JsonObject,"mode")=="silent")} silent" :
+        Outputs.SingleOrDefault(o=>OutputModel.Text(o.Path,"audioMode")=="fixed") is { } audio && audio.AudioFresh ? $"Output {audio.Slot} ready" : "Needs attention";
+    public string Armed => !Connected ? "Unknown" : State?["armed"]?.GetValue<bool>() == true ? "This session" : "Manual start";
     public bool CanPrepare => Connected && !Busy && Plan != null && State?["pendingOperationId"] == null;
     public bool CanDiscover => Connected && !Busy && HasCapability("source-discovery");
     public bool HasCapability(string value) => State?["capabilities"] is JsonArray caps && caps.Any(c => c?.GetValue<string>() == value);
     public void SetPlan(JsonObject plan) { Plan = plan; RefreshOutputs(); }
+    public void SetRouting(JsonArray? mappings) {
+        foreach(var output in Outputs)output.SetRouting(mappings?.OfType<JsonObject>().SingleOrDefault(m=>Number(m,"slot")==output.Slot));
+        var ordered=Outputs.OrderBy(o=>o.AtemInput>0?o.AtemInput:100+o.Slot).ToArray();
+        for(var i=0;i<ordered.Length;i++){var current=Outputs.IndexOf(ordered[i]);if(current!=i)Outputs.Move(current,i);}
+        Changed();
+        static int Number(JsonObject value,string key)=>value[key]?.GetValue<int>() ?? 0;
+    }
     public void Apply(JsonObject state)
     {
         var wasConnected = Connected; var oldHost = Host;
         State = state; received = Stopwatch.GetTimestamp(); Connected = true;
         if (!wasConnected || oldHost != Host) Log("Connected to local engine. Actual output state refreshed.");
-        if (!Busy) Notice = OutputModel.Text(state, "lastError", "");
+        if (!Busy && !retainNotice) Notice = OutputModel.Text(state, "lastError", "");
         if (string.IsNullOrEmpty(Notice)) Notice = "Live worker telemetry · physical SDI and listening checks remain unverified.";
         RefreshOutputs();
     }
@@ -152,8 +183,8 @@ public sealed class DashboardModel : Observable
         if (Connected) Log(reason);
         Connected = false; Notice = reason; RefreshOutputs();
     }
-    public void SetBusy(bool busy, string message) { Busy = busy; Notice = message; RefreshOutputs(); }
-    public void Message(string message) { Notice = message; Log(message); Changed(); }
+    public void SetBusy(bool busy, string message) { Busy = busy; Notice = message; retainNotice=!busy; RefreshOutputs(); }
+    public void Message(string message) { Notice = message; retainNotice=true; Log(message); Changed(); }
     public void SetSources(IEnumerable<string> sources)
     {
         var names = sources.Distinct().OrderBy(s => s).ToArray();

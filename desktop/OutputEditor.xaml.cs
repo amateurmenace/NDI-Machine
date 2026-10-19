@@ -17,10 +17,10 @@ public partial class OutputEditor : Window
         InitializeComponent();Heading.Text=$"Output {output.Slot} settings";
         var current=output.State?["settings"] as JsonObject ?? output.State?["desiredSettings"] as JsonObject ?? new JsonObject();
         var configuredDevice=OutputModel.Text(current,"device",output.Device);previousDevice=output.Device;
-        Source.ItemsSource=sources.ToArray(); Source.Text=OutputModel.Text(current,"source",output.Source);
+        Source.ItemsSource=sources.ToArray(); Source.Text=output.Running ? OutputModel.Text(current,"source",output.Source) : "";
         SourceCount.Text=$"{Source.Items.Count} sources available · type a name or choose from network discovery";
         RefreshSourceButton.IsEnabled=refreshSources!=null;
-        SourceAddress.Text=OutputModel.Text(current,"sourceUrl");
+        SourceAddress.Text=output.Running ? OutputModel.Text(current,"sourceUrl") : "";
         Bandwidth.SelectedValue=OutputModel.Text(current,"bandwidth","highest");Sizing.SelectedValue=OutputModel.Text(current,"sizing","fit");
         Device.ItemsSource=(inventory["decklink"]?["devices"] as JsonArray ?? new()).OfType<JsonObject>().Select(d=> {
             var id=OutputModel.Text(d,"persistentId"); var busy=d["busyFlags"]?.GetValue<int>()!=0;
@@ -54,6 +54,9 @@ public partial class OutputEditor : Window
     }
     private void AudioChanged(object sender,RoutedEventArgs e) {if(AudioDevice!=null)AudioDevice.IsEnabled=AudioMode.SelectedValue as string=="fixed";}
     private void Apply(object sender,RoutedEventArgs e) {
+        // Resolve editable ComboBox text at Apply as well as SelectionChanged.
+        var known=Source.Items.OfType<SourceChoice>().SingleOrDefault(s=>s.Name==Source.Text.Trim());
+        if(known!=null && known.Address.Length>0)SourceAddress.Text=known.Address;
         if(string.IsNullOrWhiteSpace(Source.Text) || Device.SelectedValue is not string device ||
             !int.TryParse(LeftChannel.Text,out var left) || left is <1 or >64 || !int.TryParse(RightChannel.Text,out var right) || right is <1 or >64 ||
             !double.TryParse(Gain.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out var gain) || !double.IsFinite(gain) || gain is <-60 or >12 ||

@@ -4,4 +4,5 @@
     <UseWPF>true</UseWPF><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../../desktop/NDIMachine.Desktop.csproj" /><ProjectReference Include="../../control/NDIMachine.Control.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../../launcher/ExecutableIdentity.cs" Link="ExecutableIdentity.cs" /></ItemGroup>
 </Project>

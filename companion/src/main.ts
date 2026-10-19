@@ -5,15 +5,17 @@ import { performance } from 'node:perf_hooks'
 import { AtemAudio, CompanionZoom, EmergencyAudio, networkAudioInput } from './audio.js'
 import { HoldGesture } from './hold.js'
 import { LocalLauncher, primeOnly } from './prime.js'
+import { ProductionRouter, capacity, validateMap } from './production.js'
+import { createServer, type Server } from 'node:http'
 
-type Config = {host: string; apiUrl: string; plan: string; atemHost: string; companionUrl: string; zoomNetwork: string; zoomFiber: string}
+type Config = {host: string; apiUrl: string; plan: string; atemHost: string; companionUrl: string; zoomNetwork: string; zoomFiber: string; productionMap:string}
 type Empty = Record<string, never>
 type Schema = {
   config: Config; secrets: undefined;
-  actions: {toggle: {options: Empty}; toggle_down: {options: Empty}; toggle_up: {options: Empty}; undo: {options: Empty}; take_all: {options: Empty}; return_normal: {options: Empty}; prepare: {options: Empty}; check: {options: Empty}};
+  actions: {router:{options:{command:string;index:number;deck:string}};toggle: {options: Empty}; toggle_down: {options: Empty}; toggle_up: {options: Empty}; undo: {options: Empty}; take_all: {options: Empty}; return_normal: {options: Empty}; prepare: {options: Empty}; check: {options: Empty}};
   feedbacks: {blocked: {type: 'boolean'; options: Empty}; ready: {type: 'boolean'; options: Empty};
-    active: {type: 'boolean'; options: Empty}; working: {type: 'boolean'; options: Empty}};
-  variables: {status: string; reason: string; engine_ready: string; routes: string; signal: string; operation: string; route_mode: string; next_action: string; audio_profile: string; undo_available: string; button_text:string; network_audio_input:string}
+    active: {type: 'boolean'; options: Empty}; working: {type: 'boolean'; options: Empty};router_selected:{type:'boolean';options:{deck:string;group:string;index:number}}};
+  variables: Record<string,string>
 }
 export const UpgradeScripts = []
 export default class ModuleInstance extends InstanceBase<Schema> {
@@ -40,8 +42,11 @@ export default class ModuleInstance extends InstanceBase<Schema> {
   private launcher=new LocalLauncher()
   private needsPrime=true
   private priming=false
+  private production?:ProductionRouter
+  private productionServer?:Server
   async init(config: Config): Promise<void> {
     this.setVariableDefinitions({
+      ...Object.fromEntries(['mk','xl'].flatMap(deck=>[...Array.from({length:capacity(deck)},(_,i)=>`source_${i}`),...Array.from({length:8},(_,i)=>`destination_${i+1}`),...Array.from({length:8},(_,i)=>'feed_'+(i+1)),...Array.from({length:8},(_,i)=>'pick_'+(i+1)),'selection','destinations','page','source_page','home_ndi','home_cloud','home_short_3','home_short_4','take','status','health','video','audio','drops'].map(key=>[`${deck}_${key}`,{name:`${deck.toUpperCase()} router ${key}`}]))),
       status: {name: 'Emergency state'}, reason: {name: 'Readiness block or last result'},
       engine_ready: {name: 'Fresh backup engine readiness'}, routes: {name: 'Videohub crosspoint readback'},
       signal: {name: 'Independently verified downstream SDI signal'}, operation: {name: 'Last operation ID'},
@@ -52,6 +57,11 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       network_audio_input: {name:'ATEM input receiving the commissioned audio-bearing NDI output'},
     })
     this.setActionDefinitions({
+      router:{name:'Production router: select / TAKE / Return SDI',options:[
+        {type:'textinput',id:'deck',label:'Deck: mk or xl',default:'mk'},
+        {type:'textinput',id:'command',label:'Command: ndi, cloud, source, destination, next, prev, sdi, cancel, take',default:'source'},
+        {type:'number',id:'index',label:'Source cell (0 based) or ATEM input (1–8)',default:0,min:0,max:16},
+      ],callback:async event=>{const {deck,command,index}=event.options;if(!this.production)return;if(command==='take')await this.productionCommand(()=>this.production!.take(deck));else if(!this.performing){try{this.production.edit(deck,command,index)}catch(error){this.production.message=String(error)}this.publishProduction()}}},
       toggle: {name: 'FAIL-OVER TOGGLE: Fiber / Network (verified routes)', options: [], callback: async () => this.execute('toggle')},
       toggle_down: {name: 'FAIL-OVER: Button down (start hold)', options: [], callback: event => {
         if (!this.performing) this.gesture.down(`${event.controlId}/${event.surfaceId ?? 'remote'}`,this.needsPrime)
@@ -74,6 +84,7 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       check: {name: 'Check readiness and routes (read only)', options: [], callback: async () => { await this.refresh() }},
     })
     this.setFeedbackDefinitions({
+      router_selected:{name:'Production router selection',type:'boolean',options:[{type:'textinput',id:'deck',label:'Deck',default:'mk'},{type:'textinput',id:'group',label:'source or destination',default:'source'},{type:'number',id:'index',label:'Index',default:0,min:0,max:16}],defaultStyle:{bgcolor:0x087f8c,color:0xffffff},callback:event=>this.production?.selected(event.options.deck,event.options.group,event.options.index) ?? false},
       blocked: {name: 'Emergency blocked or state stale', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x7d1010, color: 0xffffff}, callback: () => !this.needsPrime && (!this.fresh() || !this.ready || this.unresolved())},
       ready: {name: 'Network take ready (restores emergency outputs and overwrites routes)', type: 'boolean', options: [], defaultStyle: {bgcolor: 0xc27a00, color: 0xffffff}, callback: () => this.fresh() && this.ready && (this.routeMode !== 'NETWORK' || this.productionConfigured)},
       active: {name: 'Network routes confirmed; return to fiber available (signal Unknown)', type: 'boolean', options: [], defaultStyle: {bgcolor: 0x176434, color: 0xffffff}, callback: () => this.fresh() && this.ready && this.routesConfirmed && !this.unresolved()},
@@ -98,6 +109,7 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       {type: 'textinput', id: 'companionUrl', label: 'Companion button API (localhost)', width: 6, default: 'http://127.0.0.1:8000'},
       {type: 'textinput', id: 'zoomNetwork', label: 'ZOOM DANTE button (page/row/column)', width: 6, default: '1/1/2'},
       {type: 'textinput', id: 'zoomFiber', label: 'ZOOM MADI button (page/row/column)', width: 6, default: '1/1/1'},
+      {type:'textinput',id:'productionMap',label:'Production physical connector map JSON',width:12,multiline:true,default:'',tooltip:'normalInputs: eight normal Videohub inputs; outputs: four {device,input} physical DeckLink → Videohub mappings. Does not use emergency slot order.'},
       {type: 'static-text', id: 'info', label: 'Operation', width: 12,
         value: 'After confirmed video routes: Network presses ZOOM DANTE and enables networkAudioInput from the commissioned plan (or the fixed-audio path atemInput if no explicit destination is supplied). Exactly one path carries fixed audio; others must be silent. This audio destination does not alter video routes. Fiber presses ZOOM MADI and enables only XLR + MADI 1/2 + 3/4. Master/gains remain unchanged. No automatic routing or audio changes.'},
     ]
@@ -119,12 +131,27 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       this.setVariableValues({network_audio_input:String(networkInput)})
       this.hub = new Videohub(config.host.trim())
       this.coordinator = new Coordinator(this.plan, this.hub, this.media, this.audio)
+      if(config.productionMap?.trim()){
+        this.production=new ProductionRouter(config.apiUrl,config.atemHost,validateMap(config.productionMap),this.hub,this.plan)
+        this.coordinator=new Coordinator(this.plan,this.hub,this.media,this.production.emergencyAudio(this.audio,this.plan.paths.map(p=>p.destination-32)))
+        this.productionServer=createServer(async(request,response)=>{
+          response.setHeader('Cache-Control','no-store');response.setHeader('Content-Type','application/json')
+          if(!['127.0.0.1:9862','localhost:9862'].includes(request.headers.host ?? '') || (request.headers.origin && !['http://127.0.0.1:9862','http://localhost:9862'].includes(request.headers.origin))){response.writeHead(403).end();return}
+          if(request.method==='POST' && request.url==='/api/v1/return-sdi'){
+            try{await this.productionCommand(()=>this.production!.returnAll(),true);response.end(JSON.stringify({confirmed:true}))}catch(error){response.writeHead(409).end(JSON.stringify({error:String(error)}))}
+          }else if(request.method==='GET' && request.url==='/api/v1/state')response.end(JSON.stringify({message:this.production?.message,busy:this.performing,outputMappings:this.production?.outputMappings(),values:{...this.production?.values('mk'),...this.production?.values('xl')}}))
+          else response.writeHead(404).end()
+        })
+        this.productionServer.on('error',error=>this.log('warn',`Production app control unavailable: ${error.message}`))
+        this.productionServer.listen(9862,'127.0.0.1')
+      }
       this.reason = 'Awaiting fresh media and router state'
       this.timer = setInterval(() => { void this.refresh() }, 1000)
       await this.refresh()
     } catch (error) { this.reason = String(error); this.updateStatus(InstanceStatus.BadConfig, this.reason); this.publish() }
   }
   async destroy(): Promise<void> {
+    this.productionServer?.close();this.productionServer=undefined;this.production=undefined
     this.gesture.reset()
     if (this.timer) clearInterval(this.timer)
     this.timer = undefined; this.hub?.close()
@@ -136,21 +163,30 @@ export default class ModuleInstance extends InstanceBase<Schema> {
   private fresh(): boolean { return this.observedAt > 0 && performance.now() - this.observedAt < 2500 }
   private unresolved(): boolean { return ['PARTIAL', 'UNKNOWN'].includes(this.lastResult) }
   private publish(): void {
+    this.publishProduction()
     const fresh = this.fresh()
     const status = this.priming ? 'PRIMING' : this.performing ? 'WORKING' : this.needsPrime ? 'PRIME' : !fresh ? 'BLOCKED' : this.unresolved() ? this.lastResult : this.routeMode === 'MIXED' ? 'MIXED' : !this.ready ? 'BLOCKED' : this.routeMode
     const next = this.performing ? 'PLEASE WAIT' : this.gesture.hint || (this.needsPrime ? 'CLICK TO PRIME' : !fresh || !this.ready ? 'BLOCKED' : this.productionConfigured ? 'RESTORE + TAKE NETWORK' : this.routeMode === 'NETWORK' ? 'RETURN FIBER' : 'TAKE NETWORK')
     this.setVariableValues({status, reason: (this.unresolved() ? `${this.outcomeReason}; current: ${this.reason}` : this.reason).slice(0, 500), engine_ready: fresh && this.engineReady ? 'READY' : 'NOT READY',
-      button_text:this.priming ? 'PRIMING\nFAIL-OVER\nPLEASE WAIT' : this.needsPrime && !this.performing ? 'CLICK TO\nPRIME\nFAIL-OVER' : `${status}\nFAIL-OVER\n${next}`,
+      button_text:this.priming ? 'PRIMING\nFAIL-OVER\nPLEASE WAIT' : this.needsPrime && this.unresolved() ? 'PRIME FAILED\nCHECK APP\nRETRY' : this.needsPrime && !this.performing ? 'CLICK TO\nPRIME\nFAIL-OVER' : `${status}\nFAIL-OVER\n${next}`,
       routes: fresh && ['FIBER', 'NETWORK'].includes(this.routeMode) ? `${this.routeMode} ROUTES CONFIRMED` : 'NOT CONFIRMED',
       signal: 'UNKNOWN', operation: this.operation, route_mode: fresh ? this.routeMode : 'UNKNOWN', next_action: next, audio_profile: this.audio?.profile() ?? 'UNKNOWN', undo_available: this.coordinator?.canUndo ? 'HOLD 3s + RELEASE' : 'NO PREVIOUS CHANGE'})
     this.checkFeedbacks('blocked', 'ready', 'active', 'working')
+  }
+  private publishProduction():void{if(this.production){this.setVariableValues({...this.production.values('mk'),...this.production.values('xl')});this.checkFeedbacks('router_selected')}}
+  private async productionCommand(work:()=>Promise<void>,rethrow=false):Promise<void>{
+    if(this.performing){if(rethrow)throw new Error('Another routing operation is running');return}
+    this.performing=true;await this.pollTask;this.production!.message='WORKING · Preparing and verifying';this.publish()
+    try{await work()}catch(error){this.production!.message=`CHECK: ${String(error)}. No automatic rollback.`;if(rethrow)throw error}
+    finally{this.performing=false;this.publish()}
   }
   private refresh(): Promise<void> {
     if (this.performing || this.pollTask || !this.plan || !this.hub || !this.media) { this.publish(); return this.pollTask ?? Promise.resolve() }
     this.pollTask = (async () => {
       try {
         const [hub, media, launcher] = await Promise.allSettled([this.hub!.snapshot(), this.media!.state(),this.launcher.state()])
-        this.needsPrime=launcher.status!=='fulfilled' || !launcher.value.desktopRunning || !launcher.value.controlRunning || media.status!=='fulfilled'
+        await this.production?.refresh(hub.status==='fulfilled'?hub.value:undefined,media.status==='fulfilled'?media.value:undefined)
+        this.needsPrime=launcher.status!=='fulfilled' || !launcher.value.desktopRunning || !launcher.value.controlRunning || media.status!=='fulfilled' || media.value.outputs.every(o=>!o.running)
         this.engineReady = media.status === 'fulfilled' && !readiness(this.plan!, media.value)
         this.productionConfigured=media.status==='fulfilled' && needsRestore(this.plan!,media.value)
         const engineReason = media.status === 'rejected' ? 'Media control API unavailable; cannot take network backups' : readiness(this.plan!, media.value)

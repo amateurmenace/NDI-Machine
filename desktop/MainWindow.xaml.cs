@@ -28,7 +28,7 @@ public partial class MainWindow : Window
     {
         this.root = root; InitializeComponent(); DataContext = model;
         try{var preference=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"config","local.desktop.json")));model.SetMode(preference?["mode"]?.GetValue<string>()!="failover");}catch(Exception){model.SetMode(true);}
-        freshness.Tick += (_, _) => { model.CheckAge(); for (var i = 0; i < 4; ++i) previews[i].Update(model.Outputs[i], model.PreviewsEnabled); };
+        freshness.Tick += (_, _) => { model.CheckAge(); foreach(var output in model.Outputs) previews[output.Slot-1].Update(output, model.PreviewsEnabled); };
         Loaded += (_, _) => { freshness.Start(); polling = Poll(); companionPolling = PollCompanion(); };
         Closed += async (_, _) => { freshness.Stop(); foreach (var preview in previews) preview.Dispose(); lifetime.Cancel(); if (polling != null) await polling; if (companionPolling != null) await companionPolling; if(sourceFetch!=null)try{await sourceFetch;}catch(Exception){} client.Dispose(); lifetime.Dispose(); };
     }
@@ -38,9 +38,11 @@ public partial class MainWindow : Window
         { Timeout = TimeSpan.FromSeconds(2), MaxResponseContentBufferSize = 65536 };
         while (!lifetime.IsCancellationRequested)
         {
-            if(model.ProductionMode){try{await Task.Delay(2000,lifetime.Token);}catch(OperationCanceledException){break;}continue;}
             try
             {
+                var routing=JsonNode.Parse(await http.GetStringAsync("http://127.0.0.1:9862/api/v1/state",lifetime.Token))!.AsObject();
+                model.SetRouting(routing["outputMappings"] as JsonArray);
+                if(model.ProductionMode){await Task.Delay(2000,lifetime.Token);continue;}
                 var json = await http.GetStringAsync("http://127.0.0.1:8000/api/connections", lifetime.Token);
                 var connection = JsonNode.Parse(json)!.AsArray().OfType<JsonObject>().SingleOrDefault(c => c["label"]?.GetValue<string>() == "ndi_machine");
                 var ready = connection?["enabled"]?.GetValue<bool>() == true && connection["status"]?["level"]?.GetValue<string>() == "ok";
@@ -48,7 +50,7 @@ public partial class MainWindow : Window
                     connection?["status"]?["message"]?.GetValue<string>() ?? (ready ? "Use the failover toggle in Companion or on your Stream Deck." : "Check the ndi_machine connection in Companion."), ready);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { break; }
-            catch (Exception) { model.SetCompanion("Companion unavailable", "Cannot read current failover status. Open Companion to inspect.", false); }
+            catch (Exception) { model.SetRouting(null);model.SetCompanion("Companion unavailable", "Cannot read current failover status. Open Companion to inspect.", false); }
             try { await Task.Delay(2000, lifetime.Token); } catch (OperationCanceledException) { break; }
         }
     }
@@ -88,7 +90,7 @@ public partial class MainWindow : Window
         if (model.Busy) return;
         model.SetBusy(true, label);
         model.Log(label);
-        try { await work(); model.Message(label + " — confirmed by the worker."); }
+        try { await work(); model.Message(label + " — completed."); }
         catch (Exception error) when (!lifetime.IsCancellationRequested)
         { model.Message(label + " — " + Friendly(error)); }
         catch (OperationCanceledException) { }
@@ -106,6 +108,52 @@ public partial class MainWindow : Window
             var accepted = await client.Request(HttpMethod.Post, "emergency/prepare", new() { ["schemaVersion"] = 1, ["plan"] = plan }, id, token: lifetime.Token);
             if (OutputModel.Text(accepted, "instanceId") != host) throw new InvalidOperationException("Host changed; preparation outcome unknown");
             await client.WaitOperation(id, host, lifetime.Token);
+        });
+    }
+    private async void StopOutput(object sender,RoutedEventArgs e) {
+        if(sender is not Button {DataContext:OutputModel output} || !output.CanStop)return;
+        if(!model.HasCapability("output-stop")){model.Message("The control host needs the Stop output update.");return;}
+        var host=model.Host;var id=Guid.NewGuid().ToString();
+        var request=new JsonObject{["schemaVersion"]=1,["slot"]=output.Slot,["expectedInstanceId"]=host,
+            ["expectedWorkerInstanceId"]=OutputModel.Text(output.State,"workerInstanceId"),["expectedRevision"]=output.Revision};
+        await Command($"Stopping output {output.Slot}",async()=>{
+            await client.Request(HttpMethod.Post,$"outputs/{output.Slot}/stop",request,id,token:lifetime.Token);
+            await client.WaitOperation(id,host,lifetime.Token);
+        });
+    }
+    private async Task StopAllSources() {
+        var current=await client.State(lifetime.Token);
+        var expected=new JsonObject();
+        foreach(var output in current["outputs"]!.AsArray().OfType<JsonObject>())expected[output["slot"]!.ToString()]=new JsonObject{
+            ["expectedWorkerInstanceId"]=OutputModel.Text(output,"workerInstanceId"),["expectedRevision"]=OutputModel.NumberAt(output,"configRevision")};
+        var host=OutputModel.Text(current,"instanceId");var id=Guid.NewGuid().ToString();
+        await client.Request(HttpMethod.Post,"outputs/stop",new(){["schemaVersion"]=1,["expectedInstanceId"]=host,["expectedWorkers"]=expected},id,token:lifetime.Token);
+        await client.WaitOperation(id,host,lifetime.Token);
+    }
+    private void EngineControls(object sender,RoutedEventArgs e) {
+        var dialog=new Window{Title="NDI Machine engine",Owner=this,Width=560,Height=410,WindowStartupLocation=WindowStartupLocation.CenterOwner,Style=(Style)FindResource(typeof(Window))};
+        var panel=new StackPanel{Margin=new Thickness(24)};
+        panel.Children.Add(new TextBlock{Text="Background engine",FontSize=25,FontWeight=FontWeights.SemiBold});
+        panel.Children.Add(new TextBlock{Text="Stopping sources releases NDI receivers and SDI outputs. Their destinations will lose video. Router crosspoints stay where you set them. Restart starts idle; use PRIME or choose sources to resume.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,14,0,18)});
+        foreach(var item in new[]{("Stop all sources","sources"),("Stop sources and background engine","stop"),("Restart background engine · starts idle","restart")}) {
+            var button=new Button{Content=item.Item1,Margin=new Thickness(0,0,0,10),IsEnabled=!model.Busy};
+            button.Click+=async(_,_)=>{dialog.Close();await Command(item.Item1,async()=>{
+                if(model.Connected){if(!model.HasCapability("output-stop"))throw new InvalidOperationException("Activate the new engine first");await StopAllSources();}
+                if(item.Item2!="sources"){
+                    using var http=new HttpClient(new SocketsHttpHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(15)};
+                    using var response=await http.PostAsync("http://127.0.0.1:9861/api/v1/control/"+item.Item2,null,lifetime.Token);
+                    if(!response.IsSuccessStatusCode)throw new IOException(await response.Content.ReadAsStringAsync(lifetime.Token));
+                }
+            });};panel.Children.Add(button);
+        }
+        dialog.Content=panel;dialog.ShowDialog();
+    }
+    private async void ReturnSdi(object sender,RoutedEventArgs e) {
+        if(MessageBox.Show(this,"Restore ATEM inputs 1–8 to normal SDI?\n\nVideohub 33–40 → 9, 10, 11, 12, 18, 17, 33, 34.\nCloud links on these inputs will be removed. NDI receivers keep running until stopped.","Return to SDI",MessageBoxButton.OKCancel,MessageBoxImage.Question)!=MessageBoxResult.OK)return;
+        await Command("Returning ATEM inputs to SDI",async()=>{
+            using var http=new HttpClient(new SocketsHttpHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(45)};
+            using var response=await http.PostAsync("http://127.0.0.1:9862/api/v1/return-sdi",null,lifetime.Token);
+            var result=await response.Content.ReadAsStringAsync(lifetime.Token);if(!response.IsSuccessStatusCode)throw new IOException(result);
         });
     }
     private async void ApplySource(object sender, RoutedEventArgs e)
@@ -201,6 +249,11 @@ public partial class MainWindow : Window
         launching = true;
         try
         {
+            try {
+                using var launcher=new HttpClient(new SocketsHttpHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(3)};
+                using var launched=await launcher.PostAsync("http://127.0.0.1:9861/api/v1/control/start",null,lifetime.Token);
+                if(launched.IsSuccessStatusCode){model.Message("Engine started; sources remain idle until selected or primed.");return;}
+            }catch(HttpRequestException){}catch(OperationCanceledException)when(!lifetime.IsCancellationRequested){}
             var config = Path.Combine(root, "config", "local.commissioning.json");
             var bundled = Path.Combine(root, "engine", "NDIMachine.Control.exe");
             var development = Path.Combine(root, "control", "bin", "Release", "net8.0-windows", "win-x64", "NDIMachine.Control.exe");
@@ -211,7 +264,7 @@ public partial class MainWindow : Window
             var info = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
             info.ArgumentList.Add("--root"); info.ArgumentList.Add(root); info.ArgumentList.Add("--commission"); info.ArgumentList.Add(config);
             using var process = Process.Start(info) ?? throw new IOException("Control host did not launch");
-            model.Message("Control host launched. Saved armed intent is restored; waiting for fresh state.");
+            model.Message("Control host launched. Missing sources stay idle until you start them or press PRIME.");
             await Task.Delay(3000, lifetime.Token);
             if (process.HasExited) model.Message($"Control host exited ({process.ExitCode}). Check commissioning and dependencies.");
         }
@@ -232,7 +285,7 @@ public partial class MainWindow : Window
             FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 12, Background = (System.Windows.Media.Brush)FindResource("Canvas"), Foreground = (System.Windows.Media.Brush)FindResource("Ink"), BorderThickness = new Thickness(0) };
         panel.Children.Add(text); window.Content = panel; window.ShowDialog();
     }
-    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.4.0", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.5.0", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
         ["controlConnected"] = model.Connected, ["physicalSignalVerified"] = "Unknown", ["state"] = model.State?.DeepClone(), ["plan"] = model.Plan?.DeepClone(),
         ["events"] = new JsonArray(model.Events.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) };
     private string DiagnosticText() => DiagnosticSnapshot().ToJsonString(new JsonSerializerOptions { WriteIndented = true });

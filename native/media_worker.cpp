@@ -39,6 +39,7 @@ static std::unique_ptr<Route> prepare_route(const nm::OutputSettings& settings)
 {
     auto route = std::make_unique<Route>(settings);
     const auto finish = Clock::now() + std::chrono::seconds(10);
+    bool videoReady=false,audioReady=false;int64_t videoFrames=0,audioFrames=0;
     while (Clock::now() < finish) {
         NDIlib_video_frame_v2_t frame{};
         NDIlib_framesync_capture_video(route->receiver->sync, &frame);
@@ -46,6 +47,7 @@ static std::unique_ptr<Route> prepare_route(const nm::OutputSettings& settings)
         NDIlib_framesync_free_video(route->receiver->sync, &frame);
         NDIlib_recv_performance_t received{};
         NDIlib_recv_get_performance(route->receiver->rx, &received, nullptr);
+        videoReady=valid;videoFrames=received.video_frames;audioFrames=received.audio_frames;
         bool ndiAudioReady=true;
         if(settings.audioMode=="ndi") {
             NDIlib_audio_frame_v2_t audio{};
@@ -53,13 +55,14 @@ static std::unique_ptr<Route> prepare_route(const nm::OutputSettings& settings)
             ndiAudioReady=received.audio_frames>0 && audio.p_data && audio.no_channels>=std::max(settings.left,settings.right);
             if(audio.p_data)NDIlib_framesync_free_audio(route->receiver->sync,&audio);
         }
-        if (valid && received.video_frames > 0 && ndiAudioReady && (!route->audioReader || route->audioReader->ready())) {
+        audioReady=ndiAudioReady && (!route->audioReader || route->audioReader->ready());
+        if (valid && received.video_frames > 0 && audioReady) {
             route->lastObserved = route->lastArrival = milliseconds(); route->lastCount = received.video_frames;
             return route;
         }
         Sleep(10);
     }
-    throw std::runtime_error("Preparation timed out: require fresh decodable NDI video and selected Windows audio; existing output preserved");
+    throw std::runtime_error("Preparation timed out for '"+settings.source+"': video frames="+std::to_string(videoFrames)+", usable="+(videoReady?"yes":"no")+", audio mode="+settings.audioMode+", audio frames="+std::to_string(audioFrames)+", audio ready="+(audioReady?"yes":"no")+". Check source address and audio selection. Existing output preserved.");
 }
 class WorkerControl final : public EngineHooks
 {

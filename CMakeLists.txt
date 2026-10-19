@@ -68,3 +68,21 @@ add_executable(media-worker native/media_worker.cpp)
 target_include_directories(media-worker PRIVATE native "${NDI_SDK}/Include" "${DECKLINK_SDK}/Win/include")
 target_compile_options(media-worker PRIVATE /W4 /EHsc /utf-8)
 target_link_libraries(media-worker PRIVATE decklink_ids nlohmann_json::nlohmann_json "${NDI_SDK}/Lib/x64/Processing.NDI.Lib.x64.lib" ole32 oleaut32 gdi32 avrt advapi32)
+add_executable(ndi-receiver-check native/ndi_receiver_check.cpp)
+target_include_directories(ndi-receiver-check PRIVATE native "${NDI_SDK}/Include" "${DECKLINK_SDK}/Win/include")
+target_compile_options(ndi-receiver-check PRIVATE /W4 /EHsc /utf-8)
+target_link_libraries(ndi-receiver-check PRIVATE decklink_ids nlohmann_json::nlohmann_json "${NDI_SDK}/Lib/x64/Processing.NDI.Lib.x64.lib" ole32 oleaut32 gdi32 avrt advapi32)
+
+# Use the locally installed official ATEM SDK. No SDK headers/runtime in Git.
+set(ATEM_SDK "C:/Program Files (x86)/Blackmagic Design/Blackmagic ATEM Switchers/Developer SDK/Windows/include" CACHE PATH "Installed ATEM SDK include directory")
+if(EXISTS "${ATEM_SDK}/BMDSwitcherAPI.idl")
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/atem")
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/atem/BMDSwitcherAPI.h" "${CMAKE_CURRENT_BINARY_DIR}/atem/BMDSwitcherAPI_i.c"
+    COMMAND "${MIDL}" /nologo /env x64 /I "${ATEM_SDK}" /h BMDSwitcherAPI.h /iid BMDSwitcherAPI_i.c /out "${CMAKE_CURRENT_BINARY_DIR}/atem" "${ATEM_SDK}/BMDSwitcherAPI.idl"
+    DEPENDS "${ATEM_SDK}/BMDSwitcherAPI.idl" VERBATIM)
+  add_library(atem_ids STATIC "${CMAKE_CURRENT_BINARY_DIR}/atem/BMDSwitcherAPI_i.c")
+  target_include_directories(atem_ids PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/atem")
+  add_executable(atem-remote native/atem_remote.cpp)
+  target_compile_options(atem-remote PRIVATE /W4 /EHsc /utf-8)
+  target_link_libraries(atem-remote PRIVATE atem_ids nlohmann_json::nlohmann_json ole32 oleaut32)
+endif()

@@ -12,6 +12,7 @@ public sealed class Supervisor : BackgroundService
     private readonly string intentPath;
     private string? pending;
     private bool armed;
+    private readonly HashSet<int> activeSlots=new(); // Session-only recovery; saved selections never start receivers.
     private string lastError="";
     public string InstanceId {get;}=Guid.NewGuid().ToString();
     public Supervisor(Commission config,IWorkerPipe pipes,Inventory inventory) {
@@ -33,6 +34,7 @@ public sealed class Supervisor : BackgroundService
                 break;
             }catch(Exception error){armed=false;lastError="Cannot restore saved intent: "+error.Message;}
         }
+        armed=false; // A fresh control session requires explicit Apply or PRIME.
     }
     private void SaveIntent() {
         var content=new JsonObject{["schemaVersion"]=1,["fingerprint"]=config.Fingerprint,["armed"]=armed,
@@ -59,6 +61,18 @@ public sealed class Supervisor : BackgroundService
         }
     }
     public JsonObject AcceptPrepare(string id,JsonObject plan) {config.ValidatePlan(plan);return Accept(id,new(){["kind"]="prepare",["plan"]=plan.DeepClone()});}
+    public JsonObject AcceptStop(string id,JsonObject request) {
+        var slot=request["slot"]?.GetValue<int>() ?? 0;
+        if(request["schemaVersion"]?.GetValue<int>()!=1 || request["expectedInstanceId"]?.GetValue<string>()!=InstanceId || !desired.ContainsKey(slot) ||
+            request["expectedWorkerInstanceId"] is not JsonValue || request["expectedRevision"]?.GetValue<long>() is not >=0)
+            throw new InvalidDataException("Current host, slot and expected worker identity are required");
+        var command=(JsonObject)request.DeepClone();command["kind"]="stop";return Accept(id,command);
+    }
+    public JsonObject AcceptStopAll(string id,JsonObject request) {
+        if(request["schemaVersion"]?.GetValue<int>()!=1 || request["expectedInstanceId"]?.GetValue<string>()!=InstanceId || request["expectedWorkers"] is not JsonObject expected ||
+            config.Outputs.Any(o=>expected[o.Slot.ToString()] is not JsonObject item || item["expectedWorkerInstanceId"] is not JsonValue || item["expectedRevision"]?.GetValue<long>() is not >=0))throw new InvalidDataException("Current host and complete worker snapshot required");
+        var command=(JsonObject)request.DeepClone();command["kind"]="stop-all";return Accept(id,command);
+    }
     public JsonObject AcceptRestore(string id,JsonObject request) {
         if(request["schemaVersion"]?.GetValue<int>()!=1 || request["expectedInstanceId"]?.GetValue<string>()!=InstanceId || request["outputs"] is not JsonObject outputs || outputs.Count!=config.Outputs.Length || request["expectedWorkers"] is not JsonObject expected)
             throw new InvalidDataException("Current host and complete output snapshot required");
@@ -97,7 +111,7 @@ public sealed class Supervisor : BackgroundService
     public async Task<JsonObject> State(string nonce,CancellationToken token) {
         var timer=Stopwatch.StartNew();
         var samples=await Task.WhenAll(config.Outputs.Select(async output=>{
-            var value=await manager.State(output.Slot,token) ?? new JsonObject{["slot"]=output.Slot,["running"]=false,["health"]="unavailable",["physicalSignalVerified"]="Unknown"};
+            var value=await manager.State(output.Slot,token) ?? new JsonObject{["slot"]=output.Slot,["running"]=false,["health"]="idle",["physicalSignalVerified"]="Unknown"};
             return (Value:value,At:Stopwatch.GetTimestamp());
         }));
         var outputs=new JsonArray();
@@ -111,7 +125,7 @@ public sealed class Supervisor : BackgroundService
             outputs.Add(sample.Value);
         }
         lock(sync)return new(){["schemaVersion"]=1,["nonce"]=nonce,["instanceId"]=InstanceId,["outputs"]=outputs,["armed"]=armed,["lastError"]=lastError,["pendingOperationId"]=pending,
-            ["capabilities"]=new JsonArray("source-routing","source-discovery","output-settings","inventory","manual-discovery","emergency-restore"),["sampleDurationMs"]=timer.Elapsed.TotalMilliseconds,["physicalSignalVerified"]="Unknown"};
+            ["capabilities"]=new JsonArray("source-routing","source-discovery","output-settings","inventory","manual-discovery","emergency-restore","output-stop","explicit-start"),["sampleDurationMs"]=timer.Elapsed.TotalMilliseconds,["physicalSignalVerified"]="Unknown"};
     }
     protected override async Task ExecuteAsync(CancellationToken token) {
         while(!token.IsCancellationRequested) {
@@ -121,20 +135,32 @@ public sealed class Supervisor : BackgroundService
             try {
                 if(operation!=null && request!=null) {
                     lock(sync)operations[operation]["state"]="preparing";
-                    if(request["kind"]!.GetValue<string>()=="configure") {
+                    if(request["kind"]!.GetValue<string>()=="stop-all") {
+                        var expected=request["expectedWorkers"]!.AsObject();
+                        foreach(var output in config.Outputs)OutputManager.CheckExpected(await manager.State(output.Slot,token),expected[output.Slot.ToString()]!.AsObject());
+                        lock(sync){activeSlots.Clear();armed=false;SaveIntent();}
+                        foreach(var output in config.Outputs)await manager.Stop(output.Slot,expected[output.Slot.ToString()]!.AsObject(),()=>sent=true,token);
+                    } else if(request["kind"]!.GetValue<string>()=="stop") {
+                        var slot=request["slot"]!.GetValue<int>();
+                        OutputManager.CheckExpected(await manager.State(slot,token),request);
+                        // Disarm before the stop so an uncertain acknowledgement cannot restart it.
+                        lock(sync){activeSlots.Remove(slot);armed=activeSlots.Count>0;SaveIntent();}
+                        await manager.Stop(slot,request,()=>sent=true,token);
+                    } else if(request["kind"]!.GetValue<string>()=="configure") {
                         var slot=request["slot"]!.GetValue<int>();var settings=request["settings"]!.AsObject();
                         await manager.Apply(slot,settings,request,true,()=>sent=true,token);
-                        lock(sync){desired[slot]=(JsonObject)settings.DeepClone();armed=true;SaveIntent();}
+                        lock(sync){desired[slot]=(JsonObject)settings.DeepClone();activeSlots.Add(slot);armed=true;SaveIntent();}
                     } else {
                         var targets=config.Outputs.ToDictionary(o=>o.Slot,o=>request["kind"]!.GetValue<string>()=="restore" ? request["outputs"]![o.Slot.ToString()]!.AsObject() : OutputConfiguration.Validate(OutputConfiguration.Default(o,config.Endpoint)));
                         await manager.ApplyGroup(targets,request["expectedWorkers"] as JsonObject,()=>sent=true,token);
-                        lock(sync){foreach(var pair in targets)desired[pair.Key]=(JsonObject)pair.Value.DeepClone();armed=true;SaveIntent();}
+                        lock(sync){foreach(var pair in targets){desired[pair.Key]=(JsonObject)pair.Value.DeepClone();activeSlots.Add(pair.Key);}armed=true;SaveIntent();}
                     }
                     lock(sync){operations[operation]["state"]="committed";pending=null;lastError="";}
-                    await manager.CleanupAudio(desired.Values,token);
+                    await manager.CleanupAudio(desired.Where(p=>activeSlots.Contains(p.Key)).Select(p=>p.Value),token);
                 } else if(enabled) {
                     var errors=new List<string>();
                     foreach(var output in config.Outputs) {
+                        if(!activeSlots.Contains(output.Slot))continue;
                         try {
                             var state=await manager.State(output.Slot,token);
                             if(state==null) await manager.Apply(output.Slot,desired[output.Slot],null,false,()=>{},token);

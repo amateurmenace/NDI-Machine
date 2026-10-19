@@ -10,12 +10,13 @@
           <TextBlock Text="●" Foreground="{Binding ConnectionColor}" Margin="0,0,8,0" VerticalAlignment="Center" /><TextBlock Text="{Binding ConnectionLabel}" Foreground="{Binding ConnectionColor}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,20,0" />
           <Button Content="Start control host" Click="StartControl" Visibility="{Binding Offline, Converter={StaticResource VisibleIf}}" Margin="0,0,10,0" />
           <Button Content="Diagnostics" Click="ShowDiagnostics" />
+          <Button Content="Engine controls" Click="EngineControls" Margin="8,0,0,0" />
           <Button Content="Discovery / IPs" Click="DiscoverySettings" IsEnabled="{Binding CanDiscover}" Margin="8,0,0,0" />
         </StackPanel>
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" Background="#151D26" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="28,10">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.4.0" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.5.2" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid Margin="28,24"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="22" /><ColumnDefinition Width="300" /></Grid.ColumnDefinitions>
@@ -25,6 +26,7 @@
             <RadioButton Content="Failover" Tag="failover" GroupName="WorkMode" IsChecked="{Binding FailoverMode, Mode=OneWay}" Click="SelectMode" Foreground="{StaticResource Ink}" FontSize="17" />
           </StackPanel>
           <TextBlock Text="{Binding ModeDescription}" Foreground="{StaticResource Muted}" Margin="0,0,0,16" />
+          <TextBlock Text="{Binding ReceiverSummary}" Foreground="{StaticResource Accent}" TextWrapping="Wrap" Margin="0,0,0,16" />
           <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <StackPanel><TextBlock Text="{Binding ModeHeading}" FontSize="26" FontWeight="SemiBold" /><CheckBox Content="Local previews · no extra NDI subscriptions" IsChecked="{Binding PreviewsEnabled}" Foreground="{StaticResource Muted}" Margin="0,6,0,0" /></StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><Button Content="Refresh sources" Click="DiscoverSources" IsEnabled="{Binding CanDiscover}" ToolTip="{Binding SourceNotice}" /><Button Content="Prepare backups" Visibility="{Binding FailoverMode, Converter={StaticResource VisibleIf}}" Style="{StaticResource Primary}" Click="PrepareBackups" IsEnabled="{Binding CanPrepare}" Margin="8,0,0,0" ToolTip="Start or restore all commissioned backup sources. Does not change Videohub routes." /></StackPanel>
@@ -41,7 +43,7 @@
                 <StackPanel>
                   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                     <TextBlock Text="{Binding Number}" FontSize="25" FontWeight="Light" Foreground="{StaticResource Accent}" Margin="0,0,12,0" />
-                    <StackPanel Grid.Column="1"><TextBlock Text="{Binding Name}" FontWeight="SemiBold" /><TextBlock Text="{Binding Device}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,3,0,0" /></StackPanel>
+                    <StackPanel Grid.Column="1"><TextBlock Text="{Binding Title}" FontWeight="SemiBold" /><TextBlock Text="{Binding Connector}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,3,0,0" /></StackPanel>
                     <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="{Binding StatusColor}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
                   </Grid>
                   <Border Background="#111922" CornerRadius="6" Padding="12,8" Margin="0,6,0,6">
@@ -54,8 +56,9 @@
                     <StackPanel><TextBlock Text="SDI FRAMES COMPLETED" Style="{StaticResource Label}" /><TextBlock Text="{Binding Completed}" FontFamily="Consolas" FontSize="22" Margin="0,3,0,0" /></StackPanel>
                     <StackPanel Grid.Column="1"><TextBlock Text="{Binding AudioStatus}" Foreground="{Binding StatusColor}" HorizontalAlignment="Right" /><TextBlock Text="{Binding Deadlines}" FontSize="12" Foreground="{StaticResource Muted}" HorizontalAlignment="Right" Margin="0,6,0,0" /></StackPanel>
                   </Grid>
-                  <TextBlock Text="{Binding Timing}" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,4,0,4" />
+                  <TextBlock Text="{Binding LiveRouting}" FontSize="11" Foreground="{StaticResource Accent}" Margin="0,4,0,0" /><TextBlock Text="{Binding Timing}" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,4,0,4" />
                   <Button Content="Edit output · video / audio / hardware" Click="EditOutput" IsEnabled="{Binding CanRoute}" Margin="0,4,0,0" AutomationProperties.Name="{Binding Name, StringFormat='Edit {0} settings'}"/>
+                  <Button Content="Stop source" Click="StopOutput" IsEnabled="{Binding CanStop}" Margin="0,6,0,0" ToolTip="Release this NDI receiver and SDI output. Its destinations lose video until rerouted." />
                   <Expander Header="Receiver statistics &amp; audio meters" Foreground="{StaticResource Muted}" Margin="0,6,0,0"><StackPanel Margin="0,8,0,0"><TextBlock Text="{Binding NdiStats}" FontFamily="Consolas" FontSize="11"/><Separator/><TextBlock Text="{Binding AudioStats}" FontFamily="Consolas" FontSize="11"/></StackPanel></Expander>
                 </StackPanel>
               </Border>
@@ -67,7 +70,8 @@
             <TextBlock Text="NDI → SDI" Style="{StaticResource Label}" /><TextBlock Text="Route your production" FontSize="22" FontWeight="SemiBold" Margin="0,8,0,16" />
             <TextBlock Text="1. Open an output editor.&#10;&#10;2. Choose an NDI stream and DeckLink connector.&#10;&#10;3. Select NDI audio, a Windows audio device, or silence.&#10;&#10;4. Apply to that output." Foreground="{StaticResource Muted}" />
             <Separator /><TextBlock Text="Discovery / IPs adds remote senders. Receiver settings, audio levels, delay and statistics are available per output." Foreground="{StaticResource Muted}" FontSize="12" />
-            <Separator /><TextBlock Text="Production routing works independently of Companion and the Videohub. Changing this view does not change your outputs." Foreground="{StaticResource Accent}" FontSize="12" />
+            <Button Content="Return ATEM inputs to SDI" Click="ReturnSdi" Margin="0,16,0,0" ToolTip="Restore Videohub outputs 33–40 to the commissioned normal inputs and unlink ATEM cloud sources. Review before applying." />
+            <Separator /><TextBlock Text="Output editors work independently of Companion. Return to SDI uses the Companion router. Changing views does not change outputs." Foreground="{StaticResource Accent}" FontSize="12" />
           </StackPanel></Border>
           <TextBlock Text="The Stream Deck failover button can take over these outputs with the saved emergency preset. Hold 3 seconds and release to restore the previous production, video and audio settings." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />
           <TextBlock Text="Closing this window leaves your outputs running." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />
@@ -89,7 +93,7 @@
               <TextBlock Text="Live route confirmation is shown in Companion." Foreground="{StaticResource Muted}" FontSize="11" />
             </StackPanel>
           </Border>
-          <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="FAILOVER AUDIO PRESET" Style="{StaticResource Label}" /><TextBlock Text="Dante USB I/O Module" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,5" /><TextBlock Text="Receive 1/2 → SDI output 1&#10;Outputs 2–4 → silent&#10;Custom audio is available in each output editor." Foreground="{StaticResource Muted}" FontSize="12" /><Separator />
+          <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="FAILOVER AUDIO PRESET" Style="{StaticResource Label}" /><TextBlock Text="Dante USB I/O Module" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,5" /><TextBlock Text="{Binding PresetAudioSummary}" Foreground="{StaticResource Muted}" FontSize="12" /><Separator />
             <TextBlock Text="Physical signal: Unverified" Foreground="#F6BD75" FontSize="13" FontWeight="SemiBold" /><TextBlock Text="Counters confirm software scheduling. Verify picture, sound and sync at the ATEM." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,8,0,0" />
           </StackPanel></Border>
           <TextBlock Text="Closing this window leaves the media workers running." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />

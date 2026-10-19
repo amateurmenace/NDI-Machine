@@ -86,6 +86,21 @@ await Test("HTTP client rejects stale nonce and never retries mutations", async 
 await Test("HTTP client rejects oversized responses", async () => {
     using var client = new EngineClient(new FakeHttp { Large = true }); await Throws(() => client.State());
 });
+await Test("copied desktop is recognized without accepting another executable",()=>{
+    var folder=Path.Combine(Path.GetTempPath(),"ndi-identity-"+Guid.NewGuid());Directory.CreateDirectory(folder);
+    try {
+        var installed=Path.Combine(folder,"installed.exe");var copy=Path.Combine(folder,"copy.exe");var other=Path.Combine(folder,"other.exe");
+        File.WriteAllText(installed,"identical gui");File.Copy(installed,copy);File.WriteAllText(other,"unrelated exe");
+        var identity=new NDIMachine.Launcher.ExecutableIdentity();
+        Check(identity.Matches(installed,copy,true),"Portable GUI rejected");
+        Check(!identity.Matches(installed,copy,false),"Copied host accepted");
+        Check(!identity.Matches(installed,other,true),"Unrelated executable accepted");
+    }finally{Directory.Delete(folder,true);}return Task.CompletedTask;
+});
+await Test("idle outputs do not display a selected receiver or enable Stop",()=>{
+    var output=new OutputModel(1);output.Update(new(){["running"]=false,["health"]="idle"},new(){["source"]="Emergency preset"},true,true);
+    Check(output.Status=="IDLE" && !output.CanStop && output.Source=="No source · idle","Preset shown as running");return Task.CompletedTask;
+});
 await ConfigurationChecks.Run(Test);
 Console.WriteLine($"{passed} tests passed. Simulated control/GUI checks; no hardware writes.");
 

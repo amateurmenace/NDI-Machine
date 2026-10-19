@@ -1,48 +1,42 @@
-# Development status — 0.4.0
+# Development status — 0.5.2
 
-This is a working engineering build, not a physically qualified broadcast release. Historical evidence is in MEDIA-PROOF.md, CONTROL-PROOF.md and SDK-UPDATE.md; this page describes the current scope.
+This engineering build is installed on the commissioned workstation. Source delivery excludes proprietary SDKs, binaries, private commissioning and diagnostic captures. Historical media evidence is in MEDIA-PROOF.md and CONTROL-PROOF.md. Software checks do not establish physical broadcast qualification.
 
-## Implemented and built
+## Current behavior
 
-- Self-contained Windows x64 WPF `NDI Machine.exe`, packaged control host and independent native workers. Closing the GUI or control host leaves media running.
-- Four source/output editors: automatic network discovery, exact NDI name and optional IP:port or vendor HX transport address, highest/lowest receive bandwidth, fit/fill/stretch SDR conversion to 1080p29.97, stable DeckLink connector selection with mode/ownership/reserved-card checks.
-- Windows capture and playback-loopback audio, selected NDI audio or silence; independent stereo channels, gain, mute and 0-500 ms audio delay. Shared capture readers adapt to the SDI clock. No device-default changes.
-- Previews reuse decoded output through local shared memory at 320x180 and at most 4 fps, without another NDI receiver. Input/SDI counters, receiver queues/drops, peak meters, clipping, buffer occupancy and clock correction are exposed.
-- Manual external-IP/group discovery, source inventory, local diagnostics and persisted per-output intent. Existing custom workers survive host upgrades; explicit Apply/Prepare performs changes, missing workers recover with bounded backoff.
-- Separate Production/Failover views, persisted locally. Production shows actual output health and provides ordinary NDI/DeckLink/audio routing without polling Companion. Mode selection changes no media.
-- Companion 0.4.1: an explicit short release restores emergency media over custom production assignments, verifies readiness and takes Network over known unlocked routes. Hold three seconds and release restores preceding production settings, routes, ATEM mix and known Zoom selection. Undo is session-only. Reconnect never writes or replays. The updated control host is required for automatic production takeover.
-- Network invokes ZOOM DANTE and enables the explicitly commissioned ATEM input receiving the one audio-bearing path. Fiber invokes ZOOM MADI and enables only XLR + MADI 1/2 + 3/4. Gains, master and processing are unchanged. The module owns the sequence behind the button's Down/Up actions.
+- Self-contained Windows x64 WPF EXE, local control host and independent native media workers. Closing the GUI preserves running streams. Cold host startup starts no receivers; Apply or PRIME explicitly starts them. Stop source and Engine controls release receivers and support an idle engine restart.
+- ATEM Input 1–4 dashboard cards, ordered by the commissioned connector map, with the actual NDI Machine slot/Videohub input underneath and read-only live ATEM destinations. Commands and previews retain physical slot identity.
+- Per-output NDI source/DeckLink selection; Windows capture or playback-loopback audio, NDI audio or silence; stereo channel selection, gain/mute/audio delay; receiver settings, manual IP/group discovery and software statistics. SDI output remains 1080p29.97 UYVY.
+- Previews reuse already decoded media through local shared memory, 320x180 at up to 4 fps, with no extra NDI subscription. Windows GPU counters previously observed HX3 VideoDecode activity on RTX 5060 Ti; conversion, scheduling, previews and external-audio resampling also use CPU work. This is not a guarantee for all codecs/senders.
+- Companion quick NDI and Cloud selectors: source → Input 3/4 → TAKE on one page, More inputs for all eight. Text-only home buttons have large labels and stacked live status. Return SDI stages the normal routes for review before TAKE. GUI Return SDI uses the same coordinator after its confirmation dialog.
+- NDI discovery is shared between simultaneous readers. Source changes use the discovered transport URL and retain persistent device identity. Idle slots return promptly, preventing their pipe timeouts from making an active peer's snapshot appear stale.
+- Official ATEM SDK cloud source discovery/link/unlink, including fresh topology expectations and no replay after uncertain writes. Cloud bitrate/latency are labelled unavailable where the SDK does not expose them. Neither production routing path changes ATEM program/preview or macros.
+- Companion failover restores the emergency preset over production assignments, then verifies and routes. PRIME opens/connects/prepares before a separate toggle. Hold three seconds then release restores the session's captured previous state. Unknown ownership, locks and genuine readiness failures remain guarded. No automatic takeover on reconnect.
 
-The commissioned preset embeds Dante USB I/O Module receive 1/2 on **output 1 only**, with outputs **2-4 silent**. The operator confirmed that audio reaches **ATEM Input 3** and explicitly requested retaining video input map **6/7/8/5** to destinations **33/34/35/36**. `audio.networkAtemInput: 3` configures the audio destination independently of the video paths. Fiber remains **9/10/11/12**. Director failover is **1/1/0**, XL **21/1/1**; Zoom DANTE **1/1/2**, MADI **1/1/1**.
+## Commissioned mapping
 
-## Validation
+| Physical slot | Device suffix | Videohub input | Preferred ATEM input |
+|---|---|---|---|
+| 1 | c0 | 8 | 3 |
+| 2 | c1 | 6 | 1 |
+| 3 | c2 | 7 | 2 |
+| 4 | c3 | 5 | 4 |
 
-- Native CTest: **5/5** (read-only SDK inventory, media arithmetic/queues, audio bridge, previews and output settings/conversion/delay).
-- Control/desktop simulated tests: **28/28**, including failed prepare, revision/epoch races, displayed-state confirmation, no replay after lost ACK, reserved/busy/duplicate hardware, silent readiness and preservation of custom outputs.
-- Companion tests: **51/51**; package smoke import succeeds under the installed Node 26 permission model without connecting to hardware.
-- Actual WPF visual-tree rendering verified dashboard and editor layout. This is an application render, not a physical output test.
-- New keyed Dante USB capture path delivered 144960 frames in three seconds, nonzero samples and no timestamp/nonfinite errors. Multichannel and alternate-rate devices have not been qualified.
-- All four upgraded workers are active with previews. Fresh snapshots show zero SDI late/dropped/fallback frames. Output 1 has nonzero USB samples; outputs 2-4 report silent/muted with zero peaks. Worker identities survived the subsequent GUI/control restart. Physical signal and lip-sync remain unqualified.
-- Windows GPU counters showed VideoDecode activity for all four upgraded HX3 workers on NVIDIA RTX 5060 Ti. Conversion, scheduling, previews and external-audio resampling also use CPU work. No blanket codec or GPU guarantee is claimed.
+Persistent device prefix is 0xe6a968. Network retains VH inputs 6,7,8,5 to outputs 33–36. The latest operator instruction enables **ATEM Input 1 audio only**, superseding the earlier Input 3 choice. The emergency preset embeds Dante USB I/O Module receive 1/2 on **physical slot 2 / VH6**; the other three are silent. Fiber enables only XLR and MADI 1/2 + 3/4. Gains/master/processing remain unchanged.
 
-## Activation state
+Normal ATEM1–8 / VH33–40 routes are 9,10,11,12,18,17,33,34. Failover stays at 1/1/0 and 21/1/1. Zoom DANTE stays at 1/1/2, MADI at 1/1/1. Production NDI audio follows its selected source and does not change the ATEM mixer profile.
 
-Earlier activation upgraded all four workers sequentially under the operator's restart authorization. PRIME opened the then-installed 0.3.1 GUI/engine at 17:46:39 local, and the module confirmed backup preparation at 17:46:42. A separate operator toggle to Network was confirmed at 17:48:35. The operator confirmed they were testing the button. Codex did not press the live toggle. The launcher is registered at current-user sign-in and opens no app/media until explicitly primed. Companion shell permissions remain disabled.
+## Validation and deployment
 
-Discovery fixes found 18 sources in the initial query and 19 as the network changed. The installed GUI reports 19; sources refresh automatically on connection and when opening an editor. SDK-provided vendor HX addresses are accepted. The existing four workers remain healthy. Regressions fixed repeated state reads attempting to reuse a parented JSON node and native `0.0` versus managed `0` causing false settings mismatches.
+- Native CTest **5/5**, desktop/control **36/36**, Companion **59/59**; packaged module smoke check passes under Node26 permissions without hardware connections.
+- GUI/control/launcher 0.5.2 installed in `dist/NDI Machine-0.5.2`; desktop shortcut and launcher registration updated. `A:\NDI Machine.exe` matches the installed 0.5.2.0 EXE, SHA256 `0B2F90B5B4AD0DF597CE817164E05B7141736BE844C21E0BE50D6608F838D1EC`. The copied EXE connects through the fixed installed package; it does not replace the package's dependencies.
+- Activation preserved the existing media worker. Fresh snapshots with idle peers completed in under 1 ms after the timeout correction. GUI accessibility confirms v0.5.2, ATEM1–4 order and the matching physical output labels.
+- Read-only Panasonic AG-2 receive checks delivered 237 video frames in eight seconds, with audio and zero reported receiver drops. The operator subsequently confirmed “AG-2 is on input 3” after stopping old receivers and retrying. Later missing frames were explicitly attributed by the operator to changing/stopping the sender. The old-worker preparation timeout's exact cause is not proven; a complete successful TAKE after the final freshness correction remains to be operator-tested.
+- Companion 0.5.2 installed in the existing connection. Final icon-free home and quick pages visually inspected in the admin UI. Secret-excluded before/after exports confirm only owned pages37–43, six authorized home cells and the ndi_machine module version changed. All other buttons, connections, variables, triggers, surfaces, image library and global grid are identical. Evidence is kept privately in `router-final-preservation-proof.json`, `NDI-Text-final.companionconfig` and the final UI screenshots.
+- No live TAKE, emergency toggle, router or ATEM audio write was performed for the final label/layout update. Operator testing and intentional sender changes were preserved.
 
-The operator subsequently confirmed Input 3 and requested leaving video routing unchanged. GUI 0.4.0 is now open in Production mode; Companion 0.4.1 is installed with `networkAudioInput: 3` and both buttons retain Down/Up actions. Read-only hardware observation found Fiber crosspoints 9/10/11/12 and only XLR + MADI 1/2 + 3/4 ON. No router or ATEM audio write was made for this update.
+## Remaining qualification
 
-The operator manually stopped the old control host after automatic approval review rejected its termination. **Control host 0.4.0 is now installed and active**, alongside GUI 0.4.0 and Companion 0.4.1. Fresh verification at 19:28 America/New_York on 2026-10-18 confirms `emergency-restore`, armed recovery, all four healthy emergency-configured outputs, and an exact match between the host and Companion plans with Network audio Input 3. The four worker identities and configuration revisions remained unchanged, with zero late/dropped/fallback SDI frames. All 40 Videohub crosspoints remained unchanged; the emergency destinations were still Fiber. Saved desired output settings were preserved while their commissioning fingerprint was migrated for the audio-destination metadata correction. Automatic production takeover is now available on the next deliberate failover press. No live takeover/undo was performed during activation.
+Physical audio and calibrated lip-sync, the broader full-NDI/HX3 H.264/H.265 matrix, cloud TAKE, connector-cycle takeover, actual undo listening and real 24/72-hour soaks remain Not Run or Unknown. The AG-2 picture confirmation is an operator observation for that route, not complete signal qualification. SDI counters and ACKs do not prove downstream audio/video.
 
-Current automated validation: desktop/control **28/28**, Companion **51/51**, including connector-cycle ownership checks, production takeover and undo, stale worker/host protection, Input 3 selection and no retry after lost acknowledgements. Native media code is unchanged from the previous **5/5** run. The actual WPF Production view was rendered and inspected using live telemetry; this is an application render, not a desktop screenshot. Live connector-cycle takeover and physical listening remain untested.
-
-Companion's installed Down/Up actions and four feedbacks were restored. Full-layout reset/imports were logged at 16:42:22, 16:50:56, 16:52:18 and 17:14:04 local on 2026-10-18. The latest import retained the repaired bindings. The log does not identify the initiating client. A secret-excluded backup is saved privately; verify actions after future imports.
-
-## Remaining qualification and scope
-
-Physical SDI picture/audio, independent connector observations, calibrated ATEM levels/lip-sync, separate full-NDI and HX3 H.264/H.265 qualification, real 24/72-hour soaks, crash/device/profile-change recovery and actual failover/undo listening tests remain Not Run or Unknown. Counters, thumbnails and ACKs do not prove downstream signal.
-
-ASIO, mixing multiple audio sources together, per-application process capture, configurable video delay, HDR conversion, additional SDI standards, advanced fallback choices, authenticated LAN control and an installer remain outside this build. General Windows endpoints are exposed through WASAPI shared mode. Audio delay is available but lip-sync is not automatically calibrated.
-
-Source is intended for the user-authorized GitHub repository. Build products, private commissioning, SDKs and diagnostic captures are excluded. The local EXE package requires installed NDI Runtime, Desktop Video and VC++ x64 runtime; it contains private commissioning and must not be uploaded as a public release.
+ASIO, multi-source mixing, per-application process capture, configurable video delay, HDR conversion, additional SDI standards and authenticated LAN control remain outside this build. Audio delay can be adjusted manually; lip-sync is not automatically calibrated. Installed NDI Runtime, Desktop Video and VC++ x64 runtime are prerequisites. The commissioned package is private and must not be uploaded as a public release.

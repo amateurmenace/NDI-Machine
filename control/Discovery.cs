@@ -11,8 +11,10 @@ public sealed class Discovery
     private JsonObject? cached;
     private long sampled;
     private readonly string path;
-    public Discovery(Commission commission) {
+    private readonly Func<IEnumerable<string>,CancellationToken,Task<JsonObject>> probe;
+    public Discovery(Commission commission,Func<IEnumerable<string>,CancellationToken,Task<JsonObject>>? probe=null) {
         this.commission=commission;path=Path.Combine(commission.Root,"config","local.discovery.json");
+        this.probe=probe ?? (async (args,token)=>(await NativeTools.Run(commission,"ndi-probe.exe",args,token)).AsObject());
         if(File.Exists(path)) settings=Validate(JsonNode.Parse(File.ReadAllText(path))!.AsObject());
     }
     public static JsonObject Validate(JsonObject value) {
@@ -28,7 +30,7 @@ public sealed class Discovery
         lock(sync){File.WriteAllText(path+".tmp",next.ToJsonString());File.Move(path+".tmp",path,true);settings=next;cached=null;return (JsonObject)next.DeepClone();}
     }
     public async Task<JsonObject> Get(CancellationToken token) {
-        if(!await gate.WaitAsync(0,token)) throw new InvalidOperationException("Source discovery is already running");
+        await gate.WaitAsync(token); // Concurrent GUI/Companion readers share the completed cached scan.
         try {
             JsonObject options;
             lock(sync){if(cached!=null && Stopwatch.GetElapsedTime(sampled).TotalSeconds<5)return (JsonObject)cached.DeepClone();options=(JsonObject)settings.DeepClone();}
@@ -36,7 +38,7 @@ public sealed class Discovery
             foreach(var (key,flag) in new[]{("extraIps","--extra-ips"),("groups","--groups")}) {
                 var text=options[key]!.GetValue<string>();if(text.Length>0){arguments.Add(flag);arguments.Add(text);}
             }
-            var result=(await NativeTools.Run(commission,"ndi-probe.exe",arguments,token)).AsObject();
+            var result=await probe(arguments,token);
             result["schemaVersion"]=1;result["observedAtUtc"]=DateTimeOffset.UtcNow.ToString("O");result["discovery"]=options.DeepClone();
             lock(sync){if(JsonNode.DeepEquals(options,settings)){cached=(JsonObject)result.DeepClone();sampled=Stopwatch.GetTimestamp();}}
             return result;

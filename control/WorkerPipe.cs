@@ -48,6 +48,13 @@ public sealed class WorkerPipe : IWorkerPipe
         }
         finally { gate.Release(); }
     }
-    public Task<JsonObject> State(int slot, CancellationToken cancellation = default) =>
-        Call($"NDIMachine.output.{slot}.v1", new() { ["method"] = "state" }, cancellation: cancellation);
+    public Task<JsonObject> State(int slot, CancellationToken cancellation = default) {
+        // Missing receivers are normal in Production mode. Waiting a pipe
+        // timeout for each idle slot ages healthy peers beyond readiness limits.
+        // An existing owner still needs a fresh, bounded pipe reply.
+        if(!Mutex.TryOpenExisting($"Global\\NDIMachine.slot.{slot}",out var owner))
+            return Task.FromException<JsonObject>(new IOException("Output is idle; no slot owner"));
+        owner.Dispose();
+        return Call($"NDIMachine.output.{slot}.v1", new() { ["method"] = "state" }, cancellation: cancellation);
+    }
 }

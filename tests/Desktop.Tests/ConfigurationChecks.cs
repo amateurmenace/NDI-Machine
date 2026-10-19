@@ -9,6 +9,15 @@ internal static class ConfigurationChecks
     private static async Task Reject(Func<Task> work){try{await work();}catch(Exception){return;}throw new Exception("Expected rejection");}
     internal static JsonObject Settings(string source="Camera A")=>OutputConfiguration.Validate(OutputConfiguration.Default(new(1,"0x123",source,"silent"),"usb"));
     public static async Task Run(Func<string,Func<Task>,Task> test) {
+        await test("absent production slots return immediately without aging healthy peers",async()=>{
+            var absent=new WorkerPipe().State(1987654321);Require(absent.IsCompleted);
+            await Reject(()=>absent);
+        });
+        await test("ATEM card order changes labels without changing physical slot identities",()=>{
+            var dashboard=new DashboardModel();dashboard.SetRouting(JsonNode.Parse("""[{"slot":1,"atemInput":3,"hubInput":8,"destinations":[3]},{"slot":2,"atemInput":1,"hubInput":6,"destinations":[]},{"slot":3,"atemInput":2,"hubInput":7,"destinations":[]},{"slot":4,"atemInput":4,"hubInput":5,"destinations":[]}]""")!.AsArray());
+            Require(dashboard.Outputs.Select(o=>o.Slot).SequenceEqual(new[]{2,3,1,4}));Require(dashboard.Outputs[2].Title=="ATEM Input 3" && dashboard.Outputs[2].LiveRouting=="LIVE → ATEM 3");
+            dashboard.SetRouting(null);Require(dashboard.Outputs[2].Title=="ATEM Input 3" && dashboard.Outputs[2].LiveRouting.Contains("unavailable"));return Task.CompletedTask;
+        });
         await test("Production mode reports actual output health independently of emergency assignments",()=>{
             var dashboard=new DashboardModel();dashboard.SetPlan(new(){["paths"]=new JsonArray(new JsonObject{["slot"]=1,["source"]="Emergency",["device"]="0x123",["audioMode"]="silent"})});
             dashboard.Apply(new(){["instanceId"]="host",["outputs"]=new JsonArray(new ConfigurationPipe().Snapshot())});
@@ -33,6 +42,7 @@ internal static class ConfigurationChecks
                 var settings=Settings();settings[key]=value;await Reject(()=>Task.FromResult(OutputConfiguration.Validate(settings)));
             }
             var remote=Settings();remote["sourceUrl"]="192.0.2.1:5961";Require(OutputConfiguration.Validate(remote)["sourceUrl"]!.GetValue<string>()=="192.0.2.1:5961");
+            remote["sourceUrl"]="192.0.2.1:5353";await Reject(()=>Task.FromResult(OutputConfiguration.Validate(remote)));
             remote["sourceUrl"]="NDI-HX-SONY-PTZ-V1://192.0.2.1";Require(OutputConfiguration.Validate(remote)["sourceUrl"]!.GetValue<string>()=="NDI-HX-SONY-PTZ-V1://192.0.2.1");
         });
         await test("manual discovery validates addresses and preserves groups",async()=>{
@@ -69,6 +79,13 @@ internal static class ConfigurationChecks
         File.WriteAllText(path,"""{"schemaVersion":1,"audio":{"endpointId":"usb","policy":"fixed","backend":"wasapi","channels":[1,2],"calibration":"unity"},"outputs":[{"slot":1,"device":"0x123","source":"Camera A","audioMode":"silent"}],"videohub":{"paths":[{"slot":1,"destination":33,"normalInput":9,"backupInput":6}]}}""");
         try {
             var commission=new Commission(path,root);
+            await test("simultaneous discovery readers share one scan and receive independent results",async()=>{
+                var scans=0;var release=new TaskCompletionSource();
+                var discovery=new Discovery(commission,async(_,token)=>{scans++;await release.Task.WaitAsync(token);return new JsonObject{["sources"]=new JsonArray()};});
+                var first=discovery.Get(default);var second=discovery.Get(default);release.SetResult();
+                var results=await Task.WhenAll(first,second);Require(scans==1 && !ReferenceEquals(results[0],results[1]));
+                results[0]["changed"]=true;Require(results[1]["changed"]==null);
+            });
             await test("physical ATEM audio destination is preserved and invalid maps are rejected",async()=>{
                 var original=File.ReadAllText(path);var configured=JsonNode.Parse(original)!;
                 try {
@@ -91,6 +108,12 @@ internal static class ConfigurationChecks
                     await Reject(()=>Task.FromResult(new Commission(path,root)));
                 }finally{File.WriteAllText(path,original);}
             });
+            await test("cold supervisor never rearms persisted receivers",async()=>{
+                var intent=Path.Combine(root,"config","local.supervisor.json");Directory.CreateDirectory(Path.GetDirectoryName(intent)!);
+                File.WriteAllText(intent,new JsonObject{["schemaVersion"]=1,["fingerprint"]=commission.Fingerprint,["armed"]=true,["outputs"]=new JsonObject{["1"]=Settings("Saved camera")}}.ToJsonString());
+                try{using var supervisor=new Supervisor(commission,new ConfigurationPipe(),new Inventory(commission));var state=await supervisor.State("cold-start",default);Require(state["armed"]!.GetValue<bool>()==false);Require(state["outputs"]![0]!["desiredSettings"]!["source"]!.GetValue<string>()=="Saved camera");}
+                finally{File.Delete(intent);Directory.Delete(Path.GetDirectoryName(intent)!);}
+            });
             await test("supervisor snapshots detach worker replies and can be sampled repeatedly",async()=>{
                 using var supervisor=new Supervisor(commission,new ConfigurationPipe(),new Inventory(commission));
                 for(var i=0;i<2;i++) {
@@ -99,6 +122,18 @@ internal static class ConfigurationChecks
                     Require(snapshot["outputs"]![0]!["source"]!.GetValue<string>()=="Camera A");
                     Require(snapshot["outputs"]![0]!["desiredSettings"]!["audioMode"]!.GetValue<string>()=="silent");
                 }
+            });
+            await test("stop commands require complete current identities and reject changed idempotency bodies",async()=>{
+                using var supervisor=new Supervisor(commission,new ConfigurationPipe(),new Inventory(commission));
+                var request=new JsonObject{["schemaVersion"]=1,["slot"]=1,["expectedInstanceId"]=supervisor.InstanceId,["expectedWorkerInstanceId"]="worker",["expectedRevision"]=1L};
+                var id=Guid.NewGuid().ToString();var accepted=supervisor.AcceptStop(id,request);Require(JsonNode.DeepEquals(accepted,supervisor.AcceptStop(id,request)));
+                request["expectedRevision"]=2L;await Reject(()=>Task.FromResult(supervisor.AcceptStop(id,request)));
+                request["expectedInstanceId"]="old-host";await Reject(()=>Task.FromResult(supervisor.AcceptStop(Guid.NewGuid().ToString(),request)));
+                await Reject(()=>Task.FromResult(supervisor.AcceptStopAll(Guid.NewGuid().ToString(),new(){["schemaVersion"]=1,["expectedInstanceId"]=supervisor.InstanceId,["expectedWorkers"]=new JsonObject{["1"]=new JsonObject()}})));
+            });
+            await test("stale stop leaves the existing worker untouched",async()=>{
+                var pipe=new ConfigurationPipe();var manager=new OutputManager(commission,pipe,new FakeInventory());var expected=pipe.Expected();expected["expectedRevision"]=99L;var sent=false;
+                await Reject(()=>manager.Stop(1,expected,()=>sent=true,default));Require(!sent && pipe.Prepares==0 && pipe.Commits==0);
             });
             await test("general output changes commit once and confirm displayed settings",async()=>{
                 var pipe=new ConfigurationPipe();var manager=new OutputManager(commission,pipe,new FakeInventory());var sent=false;
