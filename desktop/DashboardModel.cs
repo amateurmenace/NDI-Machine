@@ -23,13 +23,24 @@ public sealed class OutputModel(int slot) : Observable
     public int Slot { get; } = slot;
     public int AtemInput {get;private set;}
     private int hubInput;
+    private int routeTarget;
+    private bool targetChosen;
+    private bool routingReady;
+    private JsonArray? routingDefaults;
+    public IReadOnlyList<AtemDestination> Destinations {get;}=Enumerable.Range(1,8).Select(i=>new AtemDestination(i)).ToArray();
+    public int RouteTarget {get=>routeTarget>0?routeTarget:AtemInput>0?AtemInput:Slot;set{if(value is <1 or >8)return;routeTarget=value;targetChosen=true;Changed();}}
+    public bool CanSendToAtem=>routingReady && CanRoute && SoftwareHealthy && State?["fallback"]?.GetValue<bool>()==false;
+    public bool CanReturnDefault=>routingReady;
+    public string ReturnDefaultLabel=>$"Return Input {RouteTarget} to default";
+    public string DefaultRouteLabel=>routingDefaults?.OfType<JsonObject>().SingleOrDefault(d=>d["input"]?.GetValue<int>()==RouteTarget) is { } route ? $"Default: Videohub {route["source"]} → {route["destination"]}" : "Default route unavailable";
+    public void SetProductionRouting(bool ready,JsonArray? defaults){routingReady=ready;routingDefaults=defaults;Changed();}
     public string Number => (AtemInput>0?AtemInput:Slot).ToString("00");
     public string Name => $"NDI Machine {Slot}";
     public string Title=>AtemInput>0?$"ATEM Input {AtemInput}":Name;
     public string Connector=>hubInput>0?$"{Name} · Videohub input {hubInput}":Device;
     public string LiveRouting {get;private set;}="Live ATEM route unavailable";
     public void SetRouting(JsonObject? mapping) {
-        if(mapping!=null){AtemInput=mapping["atemInput"]?.GetValue<int>() ?? 0;hubInput=mapping["hubInput"]?.GetValue<int>() ?? 0;}
+        if(mapping!=null){AtemInput=mapping["atemInput"]?.GetValue<int>() ?? 0;hubInput=mapping["hubInput"]?.GetValue<int>() ?? 0;if(!targetChosen && AtemInput>0)routeTarget=AtemInput;}
         LiveRouting=mapping?["destinations"] is JsonArray destinations ? destinations.Count>0 ? "LIVE → ATEM "+string.Join(", ",destinations.Select(n=>n!.ToString())) : "Not currently routed to an ATEM input" : "Live ATEM route unavailable";
         Changed();
     }
@@ -107,7 +118,7 @@ public sealed class DashboardModel : Observable
     public bool ProductionMode {get;private set;}=true;
     public bool FailoverMode=>!ProductionMode;
     public string ModeHeading=>ProductionMode ? "Production routing" : "Failover outputs";
-    public string ModeDescription=>ProductionMode ? "Choose any discovered NDI source and an available DeckLink output. Apply changes per output." : "Saved emergency assignments. The Companion failover button restores this preset before taking Network.";
+    public string ModeDescription=>ProductionMode ? "Choose a source, select its ATEM input, and route it when ready. Return one input or all eight to default." : "Saved emergency assignments. The Companion failover button restores this preset before taking Network.";
     public void SetMode(bool production){ProductionMode=production;Changed();}
     public bool PreviewsEnabled { get; set; } = true;
     public ObservableCollection<OutputModel> Outputs { get; } = new(Enumerable.Range(1, 4).Select(n => new OutputModel(n)));
@@ -135,6 +146,16 @@ public sealed class DashboardModel : Observable
     private bool retainNotice;
     public bool Connected { get; private set; }
     public bool Busy { get; private set; }
+    public JsonObject? ProductionRouting {get;private set;}
+    private long routingReceived;
+    public bool CanProductionRoute=>!Busy && ProductionRouting?["ready"]?.GetValue<bool>()==true && ProductionRouting?["busy"]?.GetValue<bool>()!=true && Stopwatch.GetElapsedTime(routingReceived).TotalMilliseconds<3500;
+    public string ProductionRouteStatus {get;private set;}="Connecting to Videohub routing…";
+    public string DefaultRoutesSummary=>ProductionRouting?["defaults"] is JsonArray routes ? string.Join("\n",routes.OfType<JsonObject>().Select(d=>$"ATEM {d["input"]}  ←  Videohub {d["source"]}")) : "Default routes unavailable";
+    public void SetProductionRouting(JsonObject? routing){
+        ProductionRouting=routing;routingReceived=Stopwatch.GetTimestamp();
+        ProductionRouteStatus=routing==null ? "Desktop routing needs Companion module 0.6.0 and a connected Videohub / ATEM." : routing["busy"]?.GetValue<bool>()==true ? "Routing operation in progress" : routing["ready"]?.GetValue<bool>()==true ? "Videohub routing connected" : "Videohub / ATEM routing unavailable";
+        RefreshOutputs();
+    }
     public bool Offline => !Connected;
     public string ConnectionLabel => Connected ? "ENGINE CONNECTED" : "ENGINE OFFLINE / STALE";
     public string ConnectionColor => Connected ? "#7DE1CC" : "#F6BD75";
@@ -177,6 +198,7 @@ public sealed class DashboardModel : Observable
     public void CheckAge()
     {
         if (Connected && Stopwatch.GetElapsedTime(received).TotalMilliseconds > 2500) Disconnect("Engine telemetry expired. Waiting for a fresh connection.");
+        if(ProductionRouting!=null && Stopwatch.GetElapsedTime(routingReceived).TotalMilliseconds>3500)SetProductionRouting(null);
     }
     public void Disconnect(string reason)
     {
@@ -204,6 +226,7 @@ public sealed class DashboardModel : Observable
             var state = (State?["outputs"] as JsonArray)?.OfType<JsonObject>().SingleOrDefault(o => o["slot"]?.GetValue<int>() == output.Slot);
             var path = (Plan?["paths"] as JsonArray)?.OfType<JsonObject>().SingleOrDefault(o => o["slot"]?.GetValue<int>() == output.Slot);
             output.Update(state, path, Connected, !Busy && State?["pendingOperationId"] == null && HasCapability("source-routing"));
+            output.SetProductionRouting(CanProductionRoute,ProductionRouting?["defaults"] as JsonArray);
         }
         Changed();
     }

@@ -9,12 +9,18 @@ public sealed record SourceChoice(string Name,string Address);
 public partial class OutputEditor : Window
 {
     public JsonObject? Settings {get;private set;}
+    public bool RouteAfterApply=>AlsoRoute.IsChecked==true;
+    public int AtemInput=>AtemTarget.SelectedValue is int input?input:0;
     private readonly string previousDevice;
     private bool loading=true;
     private readonly Func<Task<SourceChoice[]>>? refreshSources;
-    public OutputEditor(OutputModel output,JsonObject inventory,IEnumerable<SourceChoice> sources,Func<Task<SourceChoice[]>>? refreshSources=null) {
+    public OutputEditor(OutputModel output,JsonObject inventory,IEnumerable<SourceChoice> sources,Func<Task<SourceChoice[]>>? refreshSources=null,bool production=false,bool routingAvailable=false) {
         this.refreshSources=refreshSources;
-        InitializeComponent();Heading.Text=$"Output {output.Slot} settings";
+        InitializeComponent();Heading.Text=$"{output.Title} · source settings";
+        RoutingPanel.Visibility=production?Visibility.Visible:Visibility.Collapsed;
+        AlsoRoute.IsEnabled=routingAvailable;
+        AtemTarget.ItemsSource=output.Destinations;AtemTarget.SelectedValue=output.RouteTarget;
+        RoutingHelp.Text=routingAvailable ? "Prepare and verify this source, then route its physical connector to the selected ATEM input. Program/preview and audio mixer levels stay unchanged." : "Install Companion module 0.6.0 and connect the Videohub / ATEM to enable automatic routing. You can still apply output settings.";
         var current=output.State?["settings"] as JsonObject ?? output.State?["desiredSettings"] as JsonObject ?? new JsonObject();
         var configuredDevice=OutputModel.Text(current,"device",output.Device);previousDevice=output.Device;
         Source.ItemsSource=sources.ToArray(); Source.Text=output.Running ? OutputModel.Text(current,"source",output.Source) : "";
@@ -62,6 +68,7 @@ public partial class OutputEditor : Window
             !double.TryParse(Gain.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out var gain) || !double.IsFinite(gain) || gain is <-60 or >12 ||
             !int.TryParse(Delay.Text,out var delay) || delay is <0 or >500) {Error.Text="Select a source and connector, then enter valid channels, gain and delay.";return;}
         var mode=AudioMode.SelectedValue as string ?? "silent";var endpoint=AudioDevice.SelectedValue as string ?? "";
+        if(RouteAfterApply && AtemInput is <1 or >8){Error.Text="Select an ATEM destination.";return;}
         if(mode=="fixed" && endpoint.Length==0){Error.Text="Select a Windows audio device.";return;}
         if(device!=previousDevice && MessageBox.Show(this,"Move this slot to the selected DeckLink connector? This briefly stops this output. Other slots keep running.","Change SDI connector",MessageBoxButton.OKCancel,MessageBoxImage.Information)!=MessageBoxResult.OK)return;
         Settings=new(){["device"]=device,["source"]=Source.Text.Trim(),["sourceUrl"]=SourceAddress.Text.Trim(),["bandwidth"]=Bandwidth.SelectedValue as string ?? "highest",["sizing"]=Sizing.SelectedValue as string ?? "fit",

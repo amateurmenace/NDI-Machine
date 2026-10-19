@@ -23,7 +23,7 @@ internal static class Program
             var output=new OutputModel(1);output.Update(actual["outputs"]!.AsArray().OfType<JsonObject>().Single(o=>o["slot"]!.GetValue<int>()==1),null,true,true);
             var discovery=client.Request(HttpMethod.Get,"sources",milliseconds:15000).GetAwaiter().GetResult();
             var sources=discovery["sources"]!.AsArray().OfType<JsonObject>().Select(s=>new SourceChoice(s["name"]!.GetValue<string>(),s["endpoint"]!.GetValue<string>())).OrderBy(s=>s.Name).ToArray();
-            window=new OutputEditor(output,JsonNode.Parse(File.ReadAllText(args[2]))!.AsObject(),sources);
+            window=new OutputEditor(output,JsonNode.Parse(File.ReadAllText(args[2]))!.AsObject(),sources,production:true,routingAvailable:true);
         }else window = new MainWindow(args[0]);
         window.ShowActivated=false;window.ShowInTaskbar=false;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };

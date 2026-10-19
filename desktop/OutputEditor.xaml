@@ -4,6 +4,11 @@
   <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20"><TextBlock x:Name="Heading" FontSize="26" FontWeight="SemiBold"/><TextBlock Text="Prepare the source, then apply at a video frame boundary. Changing DeckLink connectors briefly interrupts this output." Foreground="{StaticResource Muted}" Margin="0,8,0,0"/></StackPanel>
   <StackPanel DockPanel.Dock="Bottom" Margin="0,16,0,0"><TextBlock x:Name="Error" Foreground="#F6BD75" Margin="0,0,0,10"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="Cancel" IsCancel="True" Margin="0,0,10,0"/><Button Content="Apply output settings" Style="{StaticResource Primary}" Click="Apply" IsDefault="True"/></StackPanel></StackPanel>
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel>
+   <Border x:Name="RoutingPanel" Style="{StaticResource Card}" Margin="0,0,0,16" BorderBrush="{StaticResource Accent}"><StackPanel>
+    <CheckBox x:Name="AlsoRoute" Content="Also route Videohub to the ATEM when I apply" Foreground="{StaticResource Ink}" FontSize="16" AutomationProperties.Name="Automatically route to ATEM after applying source"/>
+    <ComboBox x:Name="AtemTarget" ItemsSource="{Binding Destinations}" DisplayMemberPath="Label" SelectedValuePath="Input" IsEnabled="{Binding IsChecked, ElementName=AlsoRoute}" Margin="0,12,0,8" AutomationProperties.Name="ATEM destination for source"/>
+    <TextBlock x:Name="RoutingHelp" FontSize="12" Foreground="{StaticResource Muted}"/>
+   </StackPanel></Border>
    <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="VIDEO SOURCE &amp; OUTPUT" Style="{StaticResource Label}"/>
     <DockPanel Margin="0,12,0,6"><Button x:Name="RefreshSourceButton" DockPanel.Dock="Right" Content="Refresh sources" Click="RefreshSourceList" Padding="10,4"/><TextBlock Text="NDI source" VerticalAlignment="Center"/></DockPanel><ComboBox x:Name="Source" IsEditable="True" IsTextSearchEnabled="True" MaxDropDownHeight="360" DisplayMemberPath="Name" TextSearch.TextPath="Name" SelectedValuePath="Name" SelectionChanged="SourceChanged" AutomationProperties.Name="NDI source"/>
     <TextBlock x:Name="SourceCount" FontSize="12" Foreground="{StaticResource Muted}" Margin="0,6,0,0"/>
@@ -28,7 +33,7 @@
     <CheckBox x:Name="Muted" Content="Mute embedded audio" Foreground="{StaticResource Ink}" Margin="0,14,0,0"/>
     <TextBlock Text="Channels 1–64 · gain −60 to +12 dB · delay 0–500 ms. Windows device settings are preserved. Playback loopback captures the selected output device's mix. Audio delay needs a measured lip-sync check." FontSize="12" Foreground="{StaticResource Muted}" Margin="0,12,0,0"/>
    </StackPanel></Border>
-   <TextBlock Text="Prepare backups restores the commissioned camera/device assignments and Dante USB receive 1/2 on output 1; outputs 2–4 are silent. Custom settings are saved separately and may make emergency readiness unavailable." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,16,6,0"/>
+   <TextBlock Text="Prepare backups restores the commissioned camera, connector and audio assignments. Custom production settings are saved separately; failover restores the emergency preset when explicitly pressed." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,16,6,0"/>
   </StackPanel></ScrollViewer>
  </DockPanel></Border>
 </Window>

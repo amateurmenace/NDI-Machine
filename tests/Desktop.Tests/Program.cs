@@ -102,6 +102,7 @@ await Test("idle outputs do not display a selected receiver or enable Stop",()=>
     Check(output.Status=="IDLE" && !output.CanStop && output.Source=="No source · idle","Preset shown as running");return Task.CompletedTask;
 });
 await ConfigurationChecks.Run(Test);
+await ProductionRoutingChecks.Run(Test);
 Console.WriteLine($"{passed} tests passed. Simulated control/GUI checks; no hardware writes.");
 
 sealed class FakeHttp : HttpMessageHandler

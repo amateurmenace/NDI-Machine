@@ -16,7 +16,7 @@
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" Background="#151D26" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="28,10">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.5.2" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.6.0" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid Margin="28,24"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="22" /><ColumnDefinition Width="300" /></Grid.ColumnDefinitions>
@@ -58,6 +58,14 @@
                   </Grid>
                   <TextBlock Text="{Binding LiveRouting}" FontSize="11" Foreground="{StaticResource Accent}" Margin="0,4,0,0" /><TextBlock Text="{Binding Timing}" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,4,0,4" />
                   <Button Content="Edit output · video / audio / hardware" Click="EditOutput" IsEnabled="{Binding CanRoute}" Margin="0,4,0,0" AutomationProperties.Name="{Binding Name, StringFormat='Edit {0} settings'}"/>
+                  <StackPanel Margin="0,10,0,0" Visibility="{Binding DataContext.ProductionMode, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource VisibleIf}}">
+                    <DockPanel><TextBlock Text="Destination" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="{StaticResource Muted}"/><ComboBox ItemsSource="{Binding Destinations}" DisplayMemberPath="Label" SelectedValuePath="Input" SelectedValue="{Binding RouteTarget}" AutomationProperties.Name="{Binding Name, StringFormat='ATEM destination for {0}'}"/></DockPanel>
+                    <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                      <Button Content="Route to ATEM" Click="RouteOutputToAtem" IsEnabled="{Binding CanSendToAtem}" Style="{StaticResource Primary}" Padding="8,8" ToolTip="Route this running source to the selected ATEM input through Videohub."/>
+                      <Button Grid.Column="2" Content="Return default" Click="ReturnOutputDefault" IsEnabled="{Binding CanReturnDefault}" Padding="8,8" ToolTip="{Binding ReturnDefaultLabel}"/>
+                    </Grid>
+                    <TextBlock Text="{Binding DefaultRouteLabel}" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,5,0,0"/>
+                  </StackPanel>
                   <Button Content="Stop source" Click="StopOutput" IsEnabled="{Binding CanStop}" Margin="0,6,0,0" ToolTip="Release this NDI receiver and SDI output. Its destinations lose video until rerouted." />
                   <Expander Header="Receiver statistics &amp; audio meters" Foreground="{StaticResource Muted}" Margin="0,6,0,0"><StackPanel Margin="0,8,0,0"><TextBlock Text="{Binding NdiStats}" FontFamily="Consolas" FontSize="11"/><Separator/><TextBlock Text="{Binding AudioStats}" FontFamily="Consolas" FontSize="11"/></StackPanel></Expander>
                 </StackPanel>
@@ -68,10 +76,12 @@
         <StackPanel Grid.Column="2" Visibility="{Binding ProductionMode, Converter={StaticResource VisibleIf}}">
           <Border Style="{StaticResource Card}"><StackPanel>
             <TextBlock Text="NDI → SDI" Style="{StaticResource Label}" /><TextBlock Text="Route your production" FontSize="22" FontWeight="SemiBold" Margin="0,8,0,16" />
-            <TextBlock Text="1. Open an output editor.&#10;&#10;2. Choose an NDI stream and DeckLink connector.&#10;&#10;3. Select NDI audio, a Windows audio device, or silence.&#10;&#10;4. Apply to that output." Foreground="{StaticResource Muted}" />
+            <TextBlock Text="Choose an NDI source in Edit output. Check Also route Videohub, select an ATEM input, and Apply.&#10;&#10;For an already running source, select its destination below the preview and click Route to ATEM." Foreground="{StaticResource Muted}" />
             <Separator /><TextBlock Text="Discovery / IPs adds remote senders. Receiver settings, audio levels, delay and statistics are available per output." Foreground="{StaticResource Muted}" FontSize="12" />
-            <Button Content="Return ATEM inputs to SDI" Click="ReturnSdi" Margin="0,16,0,0" ToolTip="Restore Videohub outputs 33–40 to the commissioned normal inputs and unlink ATEM cloud sources. Review before applying." />
-            <Separator /><TextBlock Text="Output editors work independently of Companion. Return to SDI uses the Companion router. Changing views does not change outputs." Foreground="{StaticResource Accent}" FontSize="12" />
+            <Button Content="Return ALL to default" Click="ReturnSdi" IsEnabled="{Binding CanProductionRoute}" Style="{StaticResource Primary}" Margin="0,16,0,12" ToolTip="Restore all eight ATEM inputs to the saved default Videohub routes. Review the full map before applying." />
+            <TextBlock Text="{Binding DefaultRoutesSummary}" FontSize="13" Foreground="{StaticResource Muted}"/>
+            <Separator /><TextBlock Text="{Binding ProductionRouteStatus}" Foreground="{StaticResource Accent}" FontSize="12" />
+            <TextBlock Text="Routing uses the existing Companion connection. Source-only output editing works independently. Return default keeps receivers running." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,8,0,0"/>
           </StackPanel></Border>
           <TextBlock Text="The Stream Deck failover button can take over these outputs with the saved emergency preset. Hold 3 seconds and release to restore the previous production, video and audio settings." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />
           <TextBlock Text="Closing this window leaves your outputs running." Foreground="{StaticResource Muted}" FontSize="12" Margin="6,18,6,0" />

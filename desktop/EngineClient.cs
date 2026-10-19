@@ -8,10 +8,10 @@ namespace NDIMachine.Desktop;
 public sealed class EngineClient : IDisposable
 {
     private readonly HttpClient http;
-    public EngineClient(HttpMessageHandler? handler = null)
+    public EngineClient(HttpMessageHandler? handler = null, string address = "http://127.0.0.1:9860/api/v1/")
     {
         http = new HttpClient(handler ?? new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
-        { BaseAddress = new Uri("http://127.0.0.1:9860/api/v1/"), Timeout = Timeout.InfiniteTimeSpan };
+        { BaseAddress = new Uri(address), Timeout = Timeout.InfiniteTimeSpan };
     }
     public async Task<JsonObject> Request(HttpMethod method, string path, JsonObject? body = null,
         string? id = null, int milliseconds = 3000, CancellationToken token = default)

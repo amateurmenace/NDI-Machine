@@ -10,7 +10,7 @@ Versions tested on 18 October 2026 are pinned in `config/dependencies.lock.json`
 | nlohmann/json | 3.12.0 | MIT; fetched from the versioned official release with SHA-256 pinning. Its MIT notice is copied into the desktop package. |
 | ASIO / Dante Virtual Soundcard | Adapter not implemented; DVS 4.5.2.3 observed | ASIO SDK licensing review and capture adapter remain pending. DVS installation/activation and Dante Controller subscriptions are prerequisites, not supplied by this project. |
 | .NET | SDK 8.0.301; packaged runtime 8.0.32 | Self-contained WPF and ASP.NET Core executables include runtime licenses and third-party notices. |
-| Companion | 5.1.0; custom ndi-machine module 0.5.2 | MIT module source; packaged dependency notices included by the module build. |
+| Companion | 5.1.0; custom ndi-machine module 0.6.0 | MIT module source; packaged dependency notices included by the module build. |
 
 NDI® is a registered trademark of Vizrt NDI AB. Information and SDK/runtime access: [ndi.video](https://ndi.video/). The requested `NDI Machine` directory/repository name is the working project name. Before releasing a product under that name, follow the vendor's [product naming and trademark requirements](https://docs.ndi.video/all/developing-with-ndi/sdk/licensing), including contacting the NDI team about product-name use. No contact or permission is claimed here.
 

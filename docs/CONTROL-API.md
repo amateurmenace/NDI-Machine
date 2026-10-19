@@ -1,5 +1,15 @@
 # Local control host
 
+## Desktop production routing API (Companion 0.6.0)
+
+Companion serves these routes at `http://127.0.0.1:9862/api/v1/`, separate from the media engine at 9860. Existing loopback Host/Origin checks apply. `GET routing?nonce=<unique value>` returns schemaVersion 1, the echoed nonce, router instanceId, ready/busy state, eight default/current Videohub routes and physical connector mappings. The instance changes with module/config replacement; stale sessions cannot mutate routing.
+
+`POST route-output` accepts schemaVersion 1, routerInstanceId, slot 1–4, input 1–8, expectedInstanceId (engine), expectedWorkerInstanceId and expectedRevision. Optional `settings` uses the complete engine output-settings schema. Without settings it routes the existing healthy receiver. With settings it prepares that exact slot and checks committed settings/health before routing. Unmapped connectors, other unselected consumers, stale identities and changed routes are rejected before TAKE.
+
+`POST return-defaults` accepts schemaVersion 1, routerInstanceId and unique `inputs` (1–8). It restores only those saved normal crosspoints and unlinks their cloud replacements. Both POSTs require a UUID `Idempotency-Key`, share the existing TAKE/failover lock and return confirmed=true with instanceId only after readback. Reusing a key with a different body is rejected; identical requests coalesce. Commands are not replayed or rolled back after uncertain outcomes. The desktop itself sends each mutation once. No new endpoint changes the ATEM mixer or program/preview bus.
+
+## Media engine
+
 The current API binds only `127.0.0.1:9860`. It does not expose media over HTTP and does not write Videohub routes. Native media deadlines remain in independent C++ processes. The Companion coordinator performs explicit router operations after checking this API.
 
 Build with x64 .NET SDK 8.0.301 using `scripts/Build.ps1` (omit `-NativeOnly`), then `scripts/Build-Desktop.ps1`. Start with the GUI's **Start control host** or `scripts/Start-Control.ps1`, which prefers the packaged host/root; `-Development` selects the source build. Create a commissioned `config/local.commissioning.json` using the example schema and actual stable identities. Run `scripts/Prepare-Backups.ps1` to deliberately restore and start the commissioned SDI backups; this is not a read-only command.

@@ -1,5 +1,13 @@
 # Companion production router
 
+## Desktop production routing (0.6.0)
+
+The desktop uses this same coordinator and operation lock through a loopback API. **Edit output → Also route Videohub → ATEM destination → Apply** prepares the exact selected physical output before routing. **Route to ATEM** routes a healthy running output without changing its source/audio settings. **Return default** restores the selected ATEM destination; **Return ALL to default** restores all eight saved normal routes after review. Cloud replacements on affected inputs are unlinked; receiver processes and ATEM mixer/program/preview are unchanged by return actions.
+
+The normal map remains `productionMap.normalInputs`, not a snapshot taken after a temporary route. At installation it matched current Videohub readback: ATEM1–8 / VH33–40 use inputs 9,10,11,12,18,17,33,34. The GUI displays these defaults. Upgrade only the existing NDI Machine connection to module 0.6.0; no button/layout import is needed.
+
+## Stream Deck controls
+
 The home NDI and CLOUD buttons open separate quick selectors. Each uses a large text heading and two full-width status lines for the actual feeds on ATEM inputs 3 and 4. Icons were removed at the operator’s request; source names, destinations and TAKE have priority. Choose a source, choose Input 3 or Input 4, then TAKE without leaving that page. NDI can select both destinations; each configured ATEM cloud source links to one input. Choosing or browsing never starts receivers or changes live routing.
 
 More inputs opens the full eight-input selector with the current source. BACK returns to the same source category. Return to SDI stages the normal routes for all eight inputs; adjust the selected inputs if needed, then TAKE. This restores Videohub outputs 33–40 to inputs 9,10,11,12,18,17,33,34 and unlinks cloud sources on those ATEM inputs. Receivers stay available until Stop source is pressed in the app.

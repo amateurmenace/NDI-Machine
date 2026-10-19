@@ -7,6 +7,7 @@ export type Source={kind:'ndi'|'cloud'|'sdi';id:string;name:string;endpoint?:str
 export type AtemState={epoch:string;sources:{id:number;name:string;cloud:boolean;enabled:boolean;connected:boolean;linkedInput:number}[];inputs:{id:number;name:string;port:number;available:number;program:boolean;preview:boolean}[]}
 export type ProductionMap={normalInputs:number[];outputs:{device:string;input:number}[]}
 export type View={kind:'ndi'|'cloud';page:number;source?:Source;destinations:Set<number>}
+export type DesktopRouteRequest={schemaVersion:number;routerInstanceId:string;slot:number;input:number;expectedInstanceId:string;expectedWorkerInstanceId:string;expectedRevision:number;settings?:Record<string,unknown>}
 export const capacity=(deck:string):number=>deck==='xl'?16:5
 export function visibleNdi(name:string):boolean {
   const base=name.replace(/\s*\((?:chan(?:nel)?)\s*\d+\)\s*$/i,'').replace(/[\s_-]/g,'').toLowerCase()
@@ -31,12 +32,86 @@ export function selectWorker(map:ProductionMap,state:MediaState,hub:HubSnapshot,
 const expected=(output:ReadyOutput)=>({expectedWorkerInstanceId:output.workerInstanceId ?? '',expectedRevision:output.configRevision ?? 0})
 const meter=(value:number,maximum:number):string=>{const fill=Math.max(0,Math.min(6,Math.round(value/maximum*6)));return '▰'.repeat(fill)+'▱'.repeat(6-fill)}
 export class ProductionRouter {
+  readonly instanceId=randomUUID()
   readonly views:Record<string,View>={mk:{kind:'ndi',page:0,destinations:new Set()},xl:{kind:'ndi',page:0,destinations:new Set()}}
   sources:Source[]=[];atem?:AtemState;hub?:HubSnapshot;media?:MediaState
   message='Choose a source, then destinations, then TAKE';private lastDiscovery=-Infinity;private at=0;private discovery?:Promise<void>
   private mediaClient:HttpMedia
   private sourceRequest?:Promise<{sources:{name:string;endpoint:string}[]}>
   constructor(private base:string,private atemHost:string,readonly map:ProductionMap,private router:Router,private plan?:Plan){this.mediaClient=new HttpMedia(base)}
+  routingState():unknown {
+    const fresh=performance.now()-this.at<3000 && !!this.hub && !!this.atem
+    return {schemaVersion:1,instanceId:this.instanceId,ready:fresh,
+      defaults:this.map.normalInputs.map((source,i)=>({input:i+1,destination:i+33,source,current:fresh?this.hub!.routes.get(i+33):null})),
+      connectors:this.map.outputs}
+  }
+  private checkDesktop(instanceId:string,inputs:number[]):void {
+    if(instanceId!==this.instanceId)throw new Error('Routing connection or configuration changed; refresh before applying')
+    if(!inputs.length || inputs.length>8 || new Set(inputs).size!==inputs.length || inputs.some(i=>!Number.isInteger(i)||i<1||i>8))throw new Error('Select ATEM inputs 1–8')
+  }
+  async returnDefaults(instanceId:string,inputs:number[]):Promise<void>{
+    this.checkDesktop(instanceId,inputs)
+    await this.apply({kind:'sdi',id:'sdi',name:'Default SDI'},inputs)
+    this.message=`Default SDI restored to ATEM ${inputs.join(', ')}; receivers keep running`
+  }
+  // The desktop uses the same module operation lock as TAKE and failover.
+  // Prepare on the chosen physical slot; never allocate or substitute a slot.
+  async routeOutput(request:DesktopRouteRequest):Promise<void>{
+    this.checkDesktop(request.routerInstanceId,[request.input])
+    if(request.schemaVersion!==1 || !Number.isInteger(request.slot) || request.slot<1 || request.slot>4 ||
+      typeof request.expectedInstanceId!=='string' || !request.expectedInstanceId || typeof request.expectedWorkerInstanceId!=='string' ||
+      !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision<0)throw new Error('Invalid output routing request')
+    const state=await this.mediaClient.state(),initial=state.outputs.find(o=>o.slot===request.slot)
+    if(!initial || state.instanceId!==request.expectedInstanceId || (initial.workerInstanceId ?? '')!==request.expectedWorkerInstanceId ||
+      (initial.configRevision ?? 0)!==request.expectedRevision)throw new Error('Output changed before routing; refresh and select again')
+    const settings=request.settings
+    if(settings && (typeof settings!=='object' || Array.isArray(settings) || typeof settings.source!=='string' || !settings.source.trim() || typeof settings.device!=='string'))throw new Error('Complete output settings required')
+    const device=String(settings?.device ?? initial.deviceId ?? initial.desiredSettings?.device ?? '').toLowerCase()
+    const physical=this.map.outputs.find(o=>o.device.toLowerCase()===device)
+    if(!physical)throw new Error('Selected DeckLink connector has no commissioned Videohub input mapping; output was not changed')
+    let hub=await this.router.snapshot(),atem=await this.atemCall()
+    const before=hub,destination=request.input+32
+    if(hub.locks.get(destination)!=='U' || !hub.routes.has(destination) || physical.input>hub.inputs)throw new Error('Videohub destination is unavailable or locked')
+    if(!atem.inputs.some(i=>i.id===request.input))throw new Error('ATEM destination unavailable')
+    if(settings){
+      const current={...initial.settings,device:initial.deviceId ?? initial.desiredSettings?.device}
+      const changed=Object.entries(settings).some(([key,value])=>JSON.stringify(current[key as keyof typeof current])!==JSON.stringify(value))
+      const previous=this.map.outputs.find(o=>o.device.toLowerCase()===(initial.deviceId ?? '').toLowerCase())?.input
+      if(changed && [...hub.routes].some(([d,s])=>d!==destination && (s===physical.input || s===previous)))throw new Error('This output feeds another destination. Return that destination to default before changing its source.')
+    }
+    let operation:string|undefined
+    if(settings){
+      operation=randomUUID()
+      await this.api(`outputs/${request.slot}/settings`,{schemaVersion:1,slot:request.slot,expectedInstanceId:state.instanceId,...expected(initial),settings},'PUT',3000,operation)
+      for(let attempt=0;;attempt++){
+        const result=await this.mediaClient.operation(operation)
+        if(result.instanceId!==state.instanceId)throw new Error('Engine replaced during preparation; no Videohub routing')
+        if(result.state==='committed')break
+        if(['failed','unknown'].includes(result.state))throw new Error(result.error ?? result.state)
+        if(attempt===399)throw new Error('Source preparation timed out; no Videohub routing. Check the output before retrying.')
+        await new Promise(resolve=>setTimeout(resolve,250))
+      }
+    }
+    const confirmed=await this.mediaClient.state(),output=confirmed.outputs.find(o=>o.slot===request.slot)
+    const source=String(settings?.source ?? initial.source),sourceUrl=settings?.sourceUrl ?? initial.settings?.sourceUrl
+    const settingsMatch=(value:ReadyOutput)=>!settings || Object.entries(settings).every(([key,target])=>key==='device' ? String(target).toLowerCase()===value.deviceId.toLowerCase() : JSON.stringify(value.settings?.[key])===JSON.stringify(target))
+    const healthy=(value:ReadyOutput|undefined)=>value?.backend==='hardware' && value.running && value.health==='healthy' && !value.fallback && value.format==='1920x1080p30000/1001' &&
+      Number.isFinite(value.videoAgeMs) && value.videoAgeMs>=0 && value.videoAgeMs<500 && Number.isFinite(value.scheduleAgeMs) && value.scheduleAgeMs>=0 && value.scheduleAgeMs<500 &&
+      value.deviceId?.toLowerCase()===device && value.source===source && value.settings?.sourceUrl===sourceUrl &&
+      Number.isSafeInteger(value.configRevision) && value.configRevision>0 && !!value.committedOperationId && !!value.workerInstanceId && settingsMatch(value)
+    if(confirmed.instanceId!==state.instanceId || !healthy(output) ||
+      (!operation && (output!.workerInstanceId!==initial.workerInstanceId || output!.configRevision!==initial.configRevision)))throw new Error('Selected source is not confirmed healthy; Videohub routes preserved')
+    hub=await this.router.snapshot()
+    if(hub.epoch!==before.epoch || [...before.routes].some(([d,s])=>hub.routes.get(d)!==s || hub.changes.get(d)!==before.changes.get(d)))throw new Error('Videohub changed during preparation; routes preserved')
+    const fresh=await this.mediaClient.state(),actual=fresh.outputs.find(o=>o.slot===request.slot)
+    if(fresh.instanceId!==confirmed.instanceId || !healthy(actual) || actual!.workerInstanceId!==output!.workerInstanceId || actual!.configRevision!==output!.configRevision)throw new Error('Output changed before TAKE; routes preserved')
+    await this.router.route(destination,physical.input,before.routes.get(destination)!,hub.epoch)
+    atem=await this.atemCall({method:'input',input:request.input,source:0,expected:atem})
+    const final=await this.router.snapshot()
+    if(final.epoch!==hub.epoch || final.routes.get(destination)!==physical.input)throw new Error('Videohub route changed after TAKE; outcome unknown, no automatic retry')
+    this.hub=final;this.atem=atem;this.media=fresh;this.at=performance.now()
+    this.message=`Confirmed: ${source} → ATEM ${request.input} (Videohub ${physical.input} → ${destination})`
+  }
   outputMappings():unknown[]{return (this.media?.outputs ?? []).map(output=>{
     const device=output.deviceId ?? output.desiredSettings?.device as string
     const input=this.map.outputs.find(m=>m.device.toLowerCase()===device?.toLowerCase())?.input
@@ -167,6 +242,8 @@ export class ProductionRouter {
       // link/unlink; it never selects program/preview or edits ATEM macros.
       atem=await this.atemCall({method:'input',input:id,source:source.kind==='cloud'?Number(source.id):0,expected:atem})
     }
-    this.hub=await this.router.snapshot();this.atem=atem;this.media=await this.mediaClient.state();this.at=performance.now()
+    const final=await this.router.snapshot()
+    if(final.epoch!==hub.epoch || (source.kind!=='cloud' && destinations.some(id=>final.routes.get(id+32)!==(source.kind==='ndi'?videoInput:this.map.normalInputs[id-1]))))throw new Error('Videohub final route readback differs; outcome unknown, no automatic retry')
+    this.hub=final;this.atem=atem;this.media=await this.mediaClient.state();this.at=performance.now()
   }
 }

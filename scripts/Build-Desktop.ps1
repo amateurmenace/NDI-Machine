@@ -1,4 +1,4 @@
-param([switch]$IncludeLocalConfiguration, [string]$NativeBuildDirectory='build\Release', [string]$OutputDirectory='dist\NDI Machine')
+param([switch]$IncludeLocalConfiguration, [string]$NativeBuildDirectory='build\Release', [string]$OutputDirectory='dist\NDI Machine', [switch]$IncludeCompanionModule)
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $dotnet='C:\Program Files\dotnet\dotnet.exe'
@@ -32,6 +32,13 @@ try {
   Copy-Item -LiteralPath 'config\commissioning.example.json' -Destination (Join-Path $package 'config')
   Copy-Item -LiteralPath 'LICENSE','docs\DESKTOP.md','docs\DEPENDENCIES-LICENSES.md' -Destination $package
   Copy-Item -LiteralPath 'docs\WINDOWS-DOWNLOAD.md' -Destination (Join-Path $package 'START-HERE.md')
+  if($IncludeCompanionModule) {
+    $moduleVersion=(Get-Content -LiteralPath 'companion\package.json' -Raw | ConvertFrom-Json).version
+    $moduleArchive=Join-Path $root ('companion\ndi-machine-'+$moduleVersion+'.tgz')
+    if(!(Test-Path -LiteralPath $moduleArchive)){throw 'Build the matching Companion module before including it in the desktop package.'}
+    New-Item -ItemType Directory -Force -Path (Join-Path $package 'companion') | Out-Null
+    Copy-Item -LiteralPath $moduleArchive -Destination (Join-Path $package 'companion')
+  }
   Copy-Item -LiteralPath 'build\_deps\json-src\LICENSE.MIT' -Destination (Join-Path $package 'notices\nlohmann-json-MIT.txt')
   # .NET runtime packs carry their redistribution notices. Vendor SDKs/runtimes
   # are deliberately not copied; the installed NDI and Desktop Video are used.

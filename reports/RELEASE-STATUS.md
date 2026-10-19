@@ -1,4 +1,14 @@
-# Development status — 0.5.2
+# Development status — 0.6.0
+
+## Desktop production routing — current change
+
+Desktop and Companion0.6.0 add an opt-in editor checkbox to prepare the selected NDI output and route its physical Videohub input to ATEM1–8, a Route to ATEM action for a running source, individual Return default controls and a main Return ALL to default action. Saved normal routes matched current readback before the update: 9,10,11,12,18,17,33,34 to VH33–40. Defaults remain in the existing Companion configuration. Returns unlink cloud replacements and keep receivers running; mixer/program/preview are unchanged.
+
+Managed checks **40/40**, Companion checks **68/68** and the packaged Node26 module smoke check pass. New coverage exercises exact physical slot routing, preparation failure, lock/consumer/revision/worker/router changes, individual/all defaults, stale client state and idempotent commands without replay. Native sources are unchanged from the prior isolated build that passed **5/5**. Actual WPF dashboard/editor rendering was inspected with the live read-only routing API.
+
+Companion0.6.0 is installed on the existing connection. Secret-excluded configuration exports confirm that only its moduleVersionId changed; all buttons and other settings are identical. No live route, media, ATEM mixer or failover command was issued for this update. All eight default routes remained in place and receivers were idle during GUI verification. The release contains desktop0.6.0, control0.5.3, unchanged launcher behavior0.5.2 and Companion0.6.0. Physical routing/return qualification for this new GUI remains unperformed.
+
+The sections below record earlier milestones; current version and test counts above supersede their historical values.
 
 This engineering build is installed on the commissioned workstation. Source delivery excludes proprietary SDKs, binaries, private commissioning and diagnostic captures. Historical media evidence is in MEDIA-PROOF.md and CONTROL-PROOF.md. Software checks do not establish physical broadcast qualification.
 

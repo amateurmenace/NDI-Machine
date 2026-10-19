@@ -7,6 +7,7 @@ import { HoldGesture } from './hold.js'
 import { LocalLauncher, primeOnly } from './prime.js'
 import { ProductionRouter, capacity, validateMap } from './production.js'
 import { createServer, type Server } from 'node:http'
+import { DesktopRoutingApi } from './desktop-api.js'
 
 type Config = {host: string; apiUrl: string; plan: string; atemHost: string; companionUrl: string; zoomNetwork: string; zoomFiber: string; productionMap:string}
 type Empty = Record<string, never>
@@ -134,14 +135,17 @@ export default class ModuleInstance extends InstanceBase<Schema> {
       if(config.productionMap?.trim()){
         this.production=new ProductionRouter(config.apiUrl,config.atemHost,validateMap(config.productionMap),this.hub,this.plan)
         this.coordinator=new Coordinator(this.plan,this.hub,this.media,this.production.emergencyAudio(this.audio,this.plan.paths.map(p=>p.destination-32)))
+        const desktopApi=new DesktopRoutingApi(this.production,()=>this.performing,work=>this.productionCommand(work,true))
         this.productionServer=createServer(async(request,response)=>{
           response.setHeader('Cache-Control','no-store');response.setHeader('Content-Type','application/json')
           if(!['127.0.0.1:9862','localhost:9862'].includes(request.headers.host ?? '') || (request.headers.origin && !['http://127.0.0.1:9862','http://localhost:9862'].includes(request.headers.origin))){response.writeHead(403).end();return}
+          if(await desktopApi.handle(request,response))return
           if(request.method==='POST' && request.url==='/api/v1/return-sdi'){
             try{await this.productionCommand(()=>this.production!.returnAll(),true);response.end(JSON.stringify({confirmed:true}))}catch(error){response.writeHead(409).end(JSON.stringify({error:String(error)}))}
           }else if(request.method==='GET' && request.url==='/api/v1/state')response.end(JSON.stringify({message:this.production?.message,busy:this.performing,outputMappings:this.production?.outputMappings(),values:{...this.production?.values('mk'),...this.production?.values('xl')}}))
           else response.writeHead(404).end()
         })
+        this.productionServer.requestTimeout=15000
         this.productionServer.on('error',error=>this.log('warn',`Production app control unavailable: ${error.message}`))
         this.productionServer.listen(9862,'127.0.0.1')
       }

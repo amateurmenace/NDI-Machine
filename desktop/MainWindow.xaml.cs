@@ -14,6 +14,7 @@ public partial class MainWindow : Window
 {
     private readonly string root;
     private readonly EngineClient client = new();
+    private readonly ProductionClient production = new();
     private readonly DashboardModel model = new();
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherTimer freshness = new() { Interval = TimeSpan.FromMilliseconds(250) };
@@ -30,7 +31,7 @@ public partial class MainWindow : Window
         try{var preference=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"config","local.desktop.json")));model.SetMode(preference?["mode"]?.GetValue<string>()!="failover");}catch(Exception){model.SetMode(true);}
         freshness.Tick += (_, _) => { model.CheckAge(); foreach(var output in model.Outputs) previews[output.Slot-1].Update(output, model.PreviewsEnabled); };
         Loaded += (_, _) => { freshness.Start(); polling = Poll(); companionPolling = PollCompanion(); };
-        Closed += async (_, _) => { freshness.Stop(); foreach (var preview in previews) preview.Dispose(); lifetime.Cancel(); if (polling != null) await polling; if (companionPolling != null) await companionPolling; if(sourceFetch!=null)try{await sourceFetch;}catch(Exception){} client.Dispose(); lifetime.Dispose(); };
+        Closed += async (_, _) => { freshness.Stop(); foreach (var preview in previews) preview.Dispose(); lifetime.Cancel(); if (polling != null) await polling; if (companionPolling != null) await companionPolling; if(sourceFetch!=null)try{await sourceFetch;}catch(Exception){} client.Dispose(); production.Dispose(); lifetime.Dispose(); };
     }
     private async Task PollCompanion()
     {
@@ -42,6 +43,8 @@ public partial class MainWindow : Window
             {
                 var routing=JsonNode.Parse(await http.GetStringAsync("http://127.0.0.1:9862/api/v1/state",lifetime.Token))!.AsObject();
                 model.SetRouting(routing["outputMappings"] as JsonArray);
+                try{model.SetProductionRouting(await production.State(lifetime.Token));}
+                catch(Exception)when(!lifetime.IsCancellationRequested){model.SetProductionRouting(null);}
                 if(model.ProductionMode){await Task.Delay(2000,lifetime.Token);continue;}
                 var json = await http.GetStringAsync("http://127.0.0.1:8000/api/connections", lifetime.Token);
                 var connection = JsonNode.Parse(json)!.AsArray().OfType<JsonObject>().SingleOrDefault(c => c["label"]?.GetValue<string>() == "ndi_machine");
@@ -50,7 +53,7 @@ public partial class MainWindow : Window
                     connection?["status"]?["message"]?.GetValue<string>() ?? (ready ? "Use the failover toggle in Companion or on your Stream Deck." : "Check the ndi_machine connection in Companion."), ready);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { break; }
-            catch (Exception) { model.SetRouting(null);model.SetCompanion("Companion unavailable", "Cannot read current failover status. Open Companion to inspect.", false); }
+            catch (Exception) { model.SetRouting(null);model.SetProductionRouting(null);model.SetCompanion("Companion unavailable", "Cannot read current failover status. Open Companion to inspect.", false); }
             try { await Task.Delay(2000, lifetime.Token); } catch (OperationCanceledException) { break; }
         }
     }
@@ -149,11 +152,28 @@ public partial class MainWindow : Window
         dialog.Content=panel;dialog.ShowDialog();
     }
     private async void ReturnSdi(object sender,RoutedEventArgs e) {
-        if(MessageBox.Show(this,"Restore ATEM inputs 1–8 to normal SDI?\n\nVideohub 33–40 → 9, 10, 11, 12, 18, 17, 33, 34.\nCloud links on these inputs will be removed. NDI receivers keep running until stopped.","Return to SDI",MessageBoxButton.OKCancel,MessageBoxImage.Question)!=MessageBoxResult.OK)return;
-        await Command("Returning ATEM inputs to SDI",async()=>{
-            using var http=new HttpClient(new SocketsHttpHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(45)};
-            using var response=await http.PostAsync("http://127.0.0.1:9862/api/v1/return-sdi",null,lifetime.Token);
-            var result=await response.Content.ReadAsStringAsync(lifetime.Token);if(!response.IsSuccessStatusCode)throw new IOException(result);
+        if(!model.CanProductionRoute)return;
+        await Command("Returning all ATEM inputs to default",async()=>{
+            var routing=await production.State(lifetime.Token);
+            var summary=string.Join("\n",routing["defaults"]!.AsArray().OfType<JsonObject>().Select(d=>$"ATEM {d["input"]}: Videohub {d["source"]} → {d["destination"]}"));
+            if(MessageBox.Show(this,"Return all eight ATEM inputs to these saved default routes?\n\n"+summary+"\n\nCloud replacements on these inputs will be unlinked. NDI receivers keep running.","Return all to default",MessageBoxButton.OKCancel,MessageBoxImage.Question)!=MessageBoxResult.OK)throw new OperationCanceledException("Cancelled; routes unchanged.");
+            await production.Send("return-defaults",new(){["inputs"]=new JsonArray(Enumerable.Range(1,8).Select(i=>(JsonNode?)JsonValue.Create(i)).ToArray())},routing,lifetime.Token);
+        });
+    }
+    private async void ReturnOutputDefault(object sender,RoutedEventArgs e) {
+        if(sender is not Button {DataContext:OutputModel output} || !output.CanReturnDefault)return;
+        var input=output.RouteTarget;
+        await Command($"Returning ATEM Input {input} to default",async()=>{
+            await production.Send("return-defaults",new(){["inputs"]=new JsonArray(JsonValue.Create(input))},await production.State(lifetime.Token),lifetime.Token);
+        });
+    }
+    private async void RouteOutputToAtem(object sender,RoutedEventArgs e) {
+        if(sender is not Button {DataContext:OutputModel output} || !output.CanSendToAtem)return;
+        var input=output.RouteTarget;
+        var request=new JsonObject{["slot"]=output.Slot,["input"]=input,["expectedInstanceId"]=model.Host,
+            ["expectedWorkerInstanceId"]=OutputModel.Text(output.State,"workerInstanceId"),["expectedRevision"]=output.Revision};
+        await Command($"Routing {output.Source} to ATEM Input {input}",async()=>{
+            await production.Send("route-output",request,await production.State(lifetime.Token),lifetime.Token);
         });
     }
     private async void ApplySource(object sender, RoutedEventArgs e)
@@ -206,12 +226,17 @@ public partial class MainWindow : Window
             var inventory=await client.Request(HttpMethod.Get,"inventory",milliseconds:15000,token:lifetime.Token);
             var choices=discovered.Concat(output.Sources.Where(n=>!discovered.Any(s=>s.Name==n)).Select(n=>new SourceChoice(n,""))).ToArray();
             var host=model.Host;var epoch=OutputModel.Text(output.State,"workerInstanceId");var revision=output.Revision;
-            var editor=new OutputEditor(output,inventory,choices,LoadSources){Owner=this};
+            var editor=new OutputEditor(output,inventory,choices,LoadSources,model.ProductionMode,model.CanProductionRoute || model.ProductionRouting?["ready"]?.GetValue<bool>()==true && model.ProductionRouting?["busy"]?.GetValue<bool>()!=true){Owner=this};
             if(editor.ShowDialog()!=true || editor.Settings==null)return;
             var request=new JsonObject{["schemaVersion"]=1,["slot"]=output.Slot,["settings"]=editor.Settings.DeepClone(),
                 ["expectedInstanceId"]=host,["expectedWorkerInstanceId"]=epoch,["expectedRevision"]=revision};
             model.SetBusy(false,model.Notice);
-            await Command($"Applying output {output.Slot} settings",async()=>{
+            await Command(editor.RouteAfterApply?$"Applying source and routing to ATEM Input {editor.AtemInput}":$"Applying output {output.Slot} settings",async()=>{
+                if(editor.RouteAfterApply){
+                    output.RouteTarget=editor.AtemInput;request["input"]=editor.AtemInput;
+                    await production.Send("route-output",request,await production.State(lifetime.Token),lifetime.Token);
+                    return;
+                }
                 var id=Guid.NewGuid().ToString();
                 var accepted=await client.Request(HttpMethod.Put,$"outputs/{output.Slot}/settings",request,id,token:lifetime.Token);
                 if(OutputModel.Text(accepted,"instanceId")!=host)throw new InvalidOperationException("Host changed; configuration outcome unknown");

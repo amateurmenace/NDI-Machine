@@ -12,6 +12,12 @@ The optional lightweight launcher listens on localhost port 9861. Run `scripts/R
 
 ## Output controls
 
+Desktop 0.6.0 adds optional production routing through the existing **Companion module 0.6.0**. In **Edit output**, check **Also route Videohub to the ATEM when I apply**, select ATEM Input 1–8 and Apply. The checkbox starts unchecked. The operation prepares and confirms the selected physical output before routing its commissioned Videohub input to the selected ATEM destination (Videohub outputs 33–40). It unlinks a cloud replacement on that destination, without changing ATEM program, preview or mixer settings. Leaving the checkbox unchecked retains source-only editing.
+
+For an already-running source, select the destination on its card and press **Route to ATEM**. **Return default** restores only that selected destination. **Return ALL to default** in the main sidebar shows the full saved map for confirmation, then restores all eight destinations. These return actions unlink cloud replacements and leave receivers running. Defaults come from the existing Companion production map, verified against current routes before this update; temporary production routing never changes those saved defaults. Offline or busy routing disables these controls while ordinary output editing remains available.
+
+Source preparation failures do not route the Videohub. A selected connector must have a commissioned physical mapping, and an output feeding another unselected destination cannot be retuned through this combined action. Router locks, changed workers/settings and concurrent route changes are checked before TAKE. An uncertain write is reported without automatic replay or rollback.
+
 The four cards are ordered and labeled **ATEM Input 1, 2, 3, 4** using the commissioned physical connector map. Each shows its NDI Machine slot and Videohub input underneath, plus the current live ATEM destination(s). The primary label is the commissioned destination; ordinary routing can send that connector elsewhere. If Companion is unavailable, live mapping is explicitly unavailable. Commands and previews remain tied to the physical slot.
 
 **Edit output** opens the source, receiver, DeckLink and audio controls for that slot:
@@ -27,7 +33,7 @@ Settings prepare before frame-boundary commit. Confirmation requires actual work
 
 **Prepare backups**, visible in the Failover view, deliberately restores the commissioned sources/connectors and highest bandwidth: Dante USB I/O Module receive 1/2 at unity on the commissioned connector feeding **ATEM Input 1**. On this workstation that is **NDI Machine 2 / Videohub input 6**; the other three failover outputs are silent. The GUI derives this label from the plan. It does not change Videohub routes, Zoom or ATEM audio. The Companion failover button performs this restoration automatically when pressed over production assignments, waits for healthy emergency media, then takes Network. It may release/restart this application's own reassigned connectors, including cycles; it never steals unknown owners or the reserved OBS card. Hold three seconds and release to restore the saved production settings, crosspoints and ATEM/Zoom mix. This undo snapshot lasts only for the current Companion session. Opening the app, selecting a mode and background polling never invoke takeover.
 
-**Stop source** releases that receiver and SDI output. **Engine controls** can stop all sources, stop the background engine, or restart it idle. These commands leave Videohub crosspoints unchanged. **Return ATEM inputs to SDI** restores the eight commissioned routes and unlinks cloud inputs through Companion, after review; receivers remain running until explicitly stopped. Ordinary output editing works without Companion.
+**Stop source** releases that receiver and SDI output. **Engine controls** can stop all sources, stop the background engine, or restart it idle. These commands leave Videohub crosspoints unchanged. Use **Return default** or **Return ALL to default** to restore Videohub routing separately. Ordinary output editing works without Companion.
 
 The [Companion quick router](PRODUCTION-ROUTER.md) offers source → Input 3/4 → TAKE on one screen, with More inputs for all eight.
 
