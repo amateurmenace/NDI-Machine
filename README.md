@@ -2,7 +2,7 @@
 
 Native Windows NDI-to-SDI application with a self-contained WPF EXE, four independent media workers and a Companion failover toggle. The desktop provides low-overhead previews, per-output NDI/DeckLink selection, Windows capture or playback-loopback audio, NDI audio, channel/gain/mute/delay controls, receiver statistics and manual IP discovery. This is an engineering build; physical signal, lip-sync and sustained operation remain unqualified. The user's briefs are preserved in `docs/`.
 
-[v0.5.3 engineering prerelease](https://github.com/amateurmenace/NDI-Machine/releases/tag/v0.5.3) provides source downloads, the Companion 0.5.2 module and its SHA-256 checksum. This release has no Windows EXE asset; use the build instructions below.
+[Download the Windows EXE package](https://github.com/amateurmenace/NDI-Machine/releases/download/v0.5.3/NDI-Machine-0.5.3-win-x64.zip) from the [v0.5.3 engineering prerelease](https://github.com/amateurmenace/NDI-Machine/releases/tag/v0.5.3). Extract the whole ZIP and run **NDI Machine.exe**, keeping its companion folders beside it. Includes control 0.5.3 and desktop/launcher behavior 0.5.2; the desktop version remains 0.5.2 because the hotfix changed only the control host. Vendor runtimes and commissioning are required; see [Windows startup instructions](docs/WINDOWS-DOWNLOAD.md). The release also provides source, Companion 0.5.2 and SHA-256 checksums.
 
 The project is now pinned to the latest official DeckLink SDK **16.0**. Read-only compilation and hardware enumeration passed against installed Desktop Video **16.3**. See `reports/SDK-UPDATE.md` and `reports/RELEASE-STATUS.md`.
 

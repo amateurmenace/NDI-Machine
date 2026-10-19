@@ -1,5 +1,7 @@
 # NDI Machine desktop
 
+For the public portable EXE package, see [Windows download and startup instructions](https://github.com/amateurmenace/NDI-Machine/blob/main/docs/WINDOWS-DOWNLOAD.md). The public ZIP excludes private commissioning and does not replace an already-running installation.
+
 Launch **NDI Machine.exe** from the complete package folder (currently `dist/NDI Machine-0.5.2` on the commissioned workstation). The GUI is a self-contained x64 WPF executable with .NET 8.0.32. Keep `engine`, `launcher`, `build/Release`, `config` and `notices` beside it. Installed NDI Runtime, Desktop Video and Microsoft VC++ x64 runtime are prerequisites; proprietary runtimes are not bundled.
 
 On the commissioned workstation, the **NDI Machine** desktop shortcut opens this installed EXE with its package folder as the working directory. The copied A-drive EXE is recognized by executable hash and connects through the fixed installed launcher; it is not a replacement for the complete package.

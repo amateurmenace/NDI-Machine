@@ -13,7 +13,9 @@ try {
   if($LASTEXITCODE){throw 'Desktop/control test build failed'}
   & '.\build\desktop-tests\NDIMachine.Desktop.Tests.exe'
   if($LASTEXITCODE){throw 'Desktop/control tests failed'}
-  $publish=@('-c','Release','-r','win-x64','--self-contained','true',('-p:RuntimeFrameworkVersion='+$runtime),'-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-p:EnableCompressionInSingleFile=true','-p:DebugType=None','-p:DebugSymbols=false','--nologo')
+  # Explicit package contents below; do not sweep local Web SDK content globs
+  # (including previous build folders) into the published control/launcher trees.
+  $publish=@('-c','Release','-r','win-x64','--self-contained','true',('-p:RuntimeFrameworkVersion='+$runtime),'-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-p:EnableCompressionInSingleFile=true','-p:EnableDefaultContentItems=false','-p:DebugType=None','-p:DebugSymbols=false','--nologo')
   & $dotnet publish desktop\NDIMachine.Desktop.csproj @publish ('-p:OutputPath='+$root+'\build\desktop-package\') -o $package
   if($LASTEXITCODE){throw 'Desktop publish failed'}
   & $dotnet publish control\NDIMachine.Control.csproj @publish ('-p:OutputPath='+$root+'\build\control-package\') -o (Join-Path $package 'engine')
@@ -29,16 +31,20 @@ try {
   }
   Copy-Item -LiteralPath 'config\commissioning.example.json' -Destination (Join-Path $package 'config')
   Copy-Item -LiteralPath 'LICENSE','docs\DESKTOP.md','docs\DEPENDENCIES-LICENSES.md' -Destination $package
+  Copy-Item -LiteralPath 'docs\WINDOWS-DOWNLOAD.md' -Destination (Join-Path $package 'START-HERE.md')
   Copy-Item -LiteralPath 'build\_deps\json-src\LICENSE.MIT' -Destination (Join-Path $package 'notices\nlohmann-json-MIT.txt')
   # .NET runtime packs carry their redistribution notices. Vendor SDKs/runtimes
   # are deliberately not copied; the installed NDI and Desktop Video are used.
   $nugetRoot=Join-Path $env:USERPROFILE '.nuget\packages'
   foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdesktop.app.runtime.win-x64','microsoft.aspnetcore.app.runtime.win-x64')) {
     $packRoot=Join-Path $nugetRoot ($pack+'\'+$runtime)
-    foreach($notice in @('LICENSE.TXT','THIRD-PARTY-NOTICES.TXT')) {
+    foreach($notice in @('LICENSE','LICENSE.TXT','THIRD-PARTY-NOTICES.TXT')) {
       $source=Join-Path $packRoot $notice
       if(Test-Path -LiteralPath $source){Copy-Item -LiteralPath $source -Destination (Join-Path $package ('notices\'+$pack+'-'+$notice))}
     }
+  }
+  foreach($required in @('microsoft.netcore.app.runtime.win-x64-LICENSE.TXT','microsoft.windowsdesktop.app.runtime.win-x64-LICENSE','microsoft.netcore.app.runtime.win-x64-THIRD-PARTY-NOTICES.TXT','microsoft.aspnetcore.app.runtime.win-x64-THIRD-PARTY-NOTICES.TXT')) {
+    if(!(Test-Path -LiteralPath (Join-Path $package ('notices\'+$required)))){throw ('Missing runtime notice: '+$required)}
   }
   if($IncludeLocalConfiguration) {
     Copy-Item -LiteralPath 'config\local.commissioning.json' -Destination (Join-Path $package 'config')
