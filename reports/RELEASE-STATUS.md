@@ -8,6 +8,8 @@ Managed checks **40/40**, Companion checks **68/68** and the packaged Node26 mod
 
 Companion0.6.0 is installed on the existing connection. Secret-excluded configuration exports confirm that only its moduleVersionId changed; all buttons and other settings are identical. No live route, media, ATEM mixer or failover command was issued for this update. All eight default routes remained in place and receivers were idle during GUI verification. The release contains desktop0.6.0, control0.5.3, unchanged launcher behavior0.5.2 and Companion0.6.0. Physical routing/return qualification for this new GUI remains unperformed.
 
+The GUI0.6.0 EXE was activated in the existing commissioned package and the A-drive copy updated. The previous GUI window closed gracefully; engine, launcher and audio processes stayed running. Engine instance, output identities and all eight current routes were verified unchanged. The public v0.6.0 package contains22 verified files including eight x64 executables and the matching Companion module, with example commissioning only. Every ZIP entry hash matches its source. Application source commit: 21e6464cedd90b739924e5072dda9e9f9720c557.
+
 The sections below record earlier milestones; current version and test counts above supersede their historical values.
 
 This engineering build is installed on the commissioned workstation. Source delivery excludes proprietary SDKs, binaries, private commissioning and diagnostic captures. Historical media evidence is in MEDIA-PROOF.md and CONTROL-PROOF.md. Software checks do not establish physical broadcast qualification.
