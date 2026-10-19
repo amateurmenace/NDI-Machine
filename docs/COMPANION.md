@@ -1,6 +1,6 @@
 # Failover controls in Companion
 
-The custom **ndi-machine 0.4.1** module owns the entire emergency sequence. The connection label is `ndi_machine`. The Director button is currently **1/1/0** and the mirrored XL button is **21/1/1** (page/row/column). Both use **one Companion step**:
+The custom **ndi-machine 0.6.1** module owns the entire emergency sequence. The connection label is `ndi_machine`. The Director button is currently **1/1/0** and the mirrored XL button is **21/1/1** (page/row/column). Both use **one Companion step**:
 
 | Button event | Module action |
 |---|---|
@@ -12,7 +12,9 @@ The release action measures the hold; separate Companion duration groups and a b
 
 ## Prime the app
 
-When the GUI or engine is stopped, the button shows **PRIME / CLICK TO PRIME**. Its first press/release opens the packaged app and engine, waits for connection, restores the commissioned backup media, then stops. It sends no Videohub, ATEM-mix or Zoom commands. A separate subsequent press runs the displayed Fiber/Network action. A press begun in PRIME stays a prime request even if connection completes while it is held; holding PRIME does not undo or toggle.
+Desktop, launcher and control 0.6.1 add explicit window activation and optional Dante USB endpoint recovery. Companion 0.6.1 reads the engine's fresh resolved audio binding, so a Windows endpoint-ID change does not require rewriting the button or saved plan. See [desktop recovery](DESKTOP.md#dante-usb-after-a-windows-restart).
+
+When the GUI or engine is stopped, the button shows **PRIME / CLICK TO PRIME**. Its first press/release opens or raises the packaged app, selects the Failover view, starts the engine if needed, waits for connection, restores the commissioned backup media, then stops. It sends no Videohub, ATEM-mix or Zoom commands. A separate subsequent press runs the displayed Fiber/Network action. A press begun in PRIME stays a prime request even if connection completes while it is held; holding PRIME does not undo or toggle.
 
 The independent fixed launcher on localhost port 9861 must be running. `scripts/Register-Launcher.ps1` starts it and registers current-user sign-in startup. Only this package's GUI/engine can be launched; Companion shell/restricted-module access remains disabled. The launcher never starts media by itself. Failed startup/preparation reports the failure without automatically repeating mutations. Priming restores emergency defaults, so save any desired production choices before using it. Ordinary GUI use preserves custom choices.
 

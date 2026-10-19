@@ -15,6 +15,18 @@ function readyState(): MediaState {
     audio: {endpointId: plan.audioEndpointId, channels: [1, 2], mode: 'fixed', ageMs: 10, muted: false},
   }))}
 }
+test('Dante readiness follows the fresh host binding without changing the saved plan',()=>{
+  const state=readyState();state.capabilities=['audio-endpoint-binding']
+  state.audioBinding={configuredEndpointId:plan.audioEndpointId,resolvedEndpointId:'new-usb-id',available:true,message:'Recovered USB'}
+  assert.match(readiness(plan,state)!,/Dante USB/)
+  for(const output of state.outputs)output.audio.endpointId='new-usb-id'
+  assert.equal(readiness(plan,state),undefined)
+  state.audioBinding.available=false;assert.equal(readiness(plan,state),'Recovered USB')
+  state.audioBinding.available=true;state.audioBinding.configuredEndpointId='another-plan'
+  assert.ok(readiness(plan,state))
+  delete state.audioBinding;assert.ok(readiness(plan,state))
+  state.capabilities=[];assert.ok(readiness(plan,state))
+})
 test('silent backup paths require committed silence and do not require an external audio capture', () => {
   const singleAudio = structuredClone(plan); singleAudio.paths[1]!.audioMode = 'silent'
   const state = readyState()

@@ -1,6 +1,6 @@
 # NDI Machine emergency coordinator
 
-Version 0.4.1, built for Companion 5.1, module-base 2.1 and Node 26. Configure the commissioned router IP, localhost media API, emergency plan, ATEM HD8 ISO IP and localhost Companion API. Ports are physical one-based; the adapter converts once to wire numbering. Current ZOOM buttons are page/row/column 1/1/2 (DANTE) and 1/1/1 (MADI). Director failover is 1/1/0; XL failover is 21/1/1. Preserve these locations and the x32/zoomswitch connection labels.
+Version 0.6.1, built for Companion 5.1, module-base 2.1 and Node 26. Configure the commissioned router IP, localhost media API, emergency plan, ATEM HD8 ISO IP and localhost Companion API. Ports are physical one-based; the adapter converts once to wire numbering. Current ZOOM buttons are page/row/column 1/1/2 (DANTE) and 1/1/1 (MADI). Director failover is 1/1/0; XL failover is 21/1/1. Preserve these locations and the x32/zoomswitch connection labels.
 
 If the app or engine is stopped, the button shows PRIME / CLICK TO PRIME. The first press opens the fixed packaged app and engine, waits for connection and prepares the backup preset only. A separate press toggles Fiber/Network. No Videohub, ATEM mix or Zoom command is sent while priming; a press begun in PRIME remains a prime even if held. Run NDI Machine's `scripts/Register-Launcher.ps1` to install/start the fixed localhost:9861 launcher. It requires no Companion shell permissions and opens no app/media at sign-in until explicitly requested. Preparing restores the emergency preset; regular production settings remain independent during ordinary GUI use.
 
@@ -17,3 +17,5 @@ ATEM audio topology and both Zoom-related connections are checked before video c
 The pinned MIT atem-connection 3.10.3 dependency stays external to preserve runtime transport paths and receives reproducible patches during build (also applied to the packaged copy). The unused native font renderer is loaded lazily, avoiding unnecessary native-addon permissions. The socket-close patch is used to detach late UDP message callbacks before closing. This prevents a pending-ACK shutdown crash observed during read-only inventory.
 
 Do not use the editor's Test button during a live show unless a deliberate hardware take is intended. Old layout imports may overwrite the button; verify its action and feedbacks afterward.
+
+With desktop/launcher/control 0.6.1, PRIME opens or raises the Failover view before preparing. Optional unique Dante USB recovery follows Windows endpoint renumbering while retaining the saved plan and receive channels 1/2. Companion verifies the fresh engine binding and actual worker audio; it never chooses a fallback audio device itself. PRIME still sends no router, Zoom or ATEM-mix commands.

@@ -4,6 +4,12 @@ $root=Split-Path $PSScriptRoot -Parent
 $dotnet='C:\Program Files\dotnet\dotnet.exe'
 $runtime='8.0.32'
 $package=[IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
+# Read-only compatibility check: old native helpers can enumerate devices while
+# rejecting the keyed/channel-specific capture arguments required by the host.
+$audioHelper=Join-Path (Join-Path $root $NativeBuildDirectory) 'audio-host.exe'
+if(!(Test-Path -LiteralPath $audioHelper)){throw 'Build native prerequisites first'}
+& $audioHelper --list --left 1 --right 2 --key ('0'*64) *> $null
+if($LASTEXITCODE){throw 'Native audio helper is outdated or unavailable. Rebuild native targets or select a current -NativeBuildDirectory.'}
 if(!$IncludeLocalConfiguration -and (Get-ChildItem -LiteralPath (Join-Path $package 'config') -Filter 'local.*' -ErrorAction SilentlyContinue)) {
   throw 'Existing package contains private local configuration. Use a fresh checkout/output directory for a public package, or explicitly request -IncludeLocalConfiguration.'
 }

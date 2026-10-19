@@ -3,5 +3,7 @@
     <TargetFramework>net8.0-windows</TargetFramework><OutputType>WinExe</OutputType>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <AssemblyName>NDIMachine.Launcher</AssemblyName>
+    <Version>0.6.1</Version>
   </PropertyGroup>
+  <ItemGroup><Compile Include="../shared/DesktopActivation.cs" Link="DesktopActivation.cs" /></ItemGroup>
 </Project>

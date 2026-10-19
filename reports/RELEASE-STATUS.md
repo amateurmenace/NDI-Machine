@@ -1,6 +1,14 @@
-# Development status — 0.6.0
+# Development status — 0.6.1
 
-## Desktop production routing — current change
+## PRIME and Dante USB recovery — installed 0.6.1
+
+Desktop/launcher/control/Companion 0.6.1 fix explicit PRIME window activation and add opt-in recovery when Windows changes the Dante USB endpoint ID. PRIME opens or raises the Failover view. The engine keeps the saved plan and resolves the unique matching active Dante USB receive endpoint at startup and explicit preparation; missing/ambiguous devices fail, and receive 1/2 remains fixed. Fresh engine state exposes the binding for desktop/Companion readiness. No media or routes start automatically.
+
+Validation: managed **47/47**, Companion **69/69** plus packaged Node26 smoke, native **5/5**. Live execution of the same primeOnly path confirmed four healthy emergency outputs, fresh Dante USB audio on slot2 and zero late/dropped frames. Actual GUI accessibility confirmed both new-window Failover launch and existing Production-to-Failover activation. Videohub routes/locks, ATEM audio-source state and Zoom MADI selection were identical before/after. No toggle/TAKE was sent; physical sound/lip-sync and soak remain unqualified. The system is left primed, so the next failover press performs Network take.
+
+An obsolete installed audio helper initially rejected the current capture arguments. The current isolated native audio-host/media-worker pair is now installed; Build-Desktop.ps1 includes a read-only compatibility gate to prevent packaging that stale helper again. The existing commissioned package and A-drive EXE are updated. Companion export differences are limited to moduleVersionId. Private rollback/proof files are listed in AGENTS.md. Public binary release remains v0.6.0; this task updates installed software and source, without publishing a new release.
+
+## Desktop production routing — previous 0.6.0 change
 
 Desktop and Companion0.6.0 add an opt-in editor checkbox to prepare the selected NDI output and route its physical Videohub input to ATEM1–8, a Route to ATEM action for a running source, individual Return default controls and a main Return ALL to default action. Saved normal routes matched current readback before the update: 9,10,11,12,18,17,33,34 to VH33–40. Defaults remain in the existing Companion configuration. Returns unlink cloud replacements and keep receivers running; mixer/program/preview are unchanged.
 

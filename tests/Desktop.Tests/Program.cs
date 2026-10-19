@@ -103,6 +103,8 @@ await Test("idle outputs do not display a selected receiver or enable Stop",()=>
 });
 await ConfigurationChecks.Run(Test);
 await ProductionRoutingChecks.Run(Test);
+await ActivationChecks.Run(Test);
+await AudioRecoveryChecks.Run(Test);
 Console.WriteLine($"{passed} tests passed. Simulated control/GUI checks; no hardware writes.");
 
 sealed class FakeHttp : HttpMessageHandler

@@ -16,7 +16,7 @@
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" Background="#151D26" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="28,10">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.6.0" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Notice}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,20,0" MaxHeight="48" /><TextBlock Grid.Column="1" Text="HARDWARE MODE  /  v0.6.1" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center" /></Grid>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid Margin="28,24"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="22" /><ColumnDefinition Width="300" /></Grid.ColumnDefinitions>

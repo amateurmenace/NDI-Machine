@@ -17,7 +17,7 @@ public sealed class Supervisor : BackgroundService
     public string InstanceId {get;}=Guid.NewGuid().ToString();
     public Supervisor(Commission config,IWorkerPipe pipes,Inventory inventory) {
         this.config=config;manager=new(config,pipes,inventory);
-        foreach(var output in config.Outputs) desired[output.Slot]=OutputConfiguration.Validate(OutputConfiguration.Default(output,config.Endpoint));
+        foreach(var output in config.Outputs) desired[output.Slot]=OutputConfiguration.Validate(OutputConfiguration.Default(output,config.EffectiveEndpoint));
         intentPath=Path.Combine(config.Root,"config","local.supervisor.json");
         foreach(var path in new[]{intentPath,intentPath+".lkg"}) {
             if(!File.Exists(path)) continue;
@@ -121,11 +121,12 @@ public sealed class Supervisor : BackgroundService
             if(sample.Value["audio"] is JsonObject audio && audio["ageMs"]!=null)audio["ageMs"]=audio["ageMs"]!.GetValue<long>()+elapsed;
             lock(sync)sample.Value["desiredSettings"]=desired[sample.Value["slot"]!.GetValue<int>()].DeepClone();
             var assignment=config.Outputs.Single(o=>o.Slot==sample.Value["slot"]!.GetValue<int>());
-            sample.Value["emergencyConfigured"]=OutputConfiguration.Matches(OutputConfiguration.Validate(OutputConfiguration.Default(assignment,config.Endpoint)),sample.Value);
+            sample.Value["emergencyConfigured"]=config.AudioAvailable && OutputConfiguration.Matches(OutputConfiguration.Validate(OutputConfiguration.Default(assignment,config.EffectiveEndpoint)),sample.Value);
             outputs.Add(sample.Value);
         }
         lock(sync)return new(){["schemaVersion"]=1,["nonce"]=nonce,["instanceId"]=InstanceId,["outputs"]=outputs,["armed"]=armed,["lastError"]=lastError,["pendingOperationId"]=pending,
-            ["capabilities"]=new JsonArray("source-routing","source-discovery","output-settings","inventory","manual-discovery","emergency-restore","output-stop","explicit-start"),["sampleDurationMs"]=timer.Elapsed.TotalMilliseconds,["physicalSignalVerified"]="Unknown"};
+            ["audioBinding"]=config.AudioState(),
+            ["capabilities"]=new JsonArray("source-routing","source-discovery","output-settings","inventory","manual-discovery","emergency-restore","output-stop","explicit-start","audio-endpoint-binding"),["sampleDurationMs"]=timer.Elapsed.TotalMilliseconds,["physicalSignalVerified"]="Unknown"};
     }
     protected override async Task ExecuteAsync(CancellationToken token) {
         while(!token.IsCancellationRequested) {
@@ -151,7 +152,8 @@ public sealed class Supervisor : BackgroundService
                         await manager.Apply(slot,settings,request,true,()=>sent=true,token);
                         lock(sync){desired[slot]=(JsonObject)settings.DeepClone();activeSlots.Add(slot);armed=true;SaveIntent();}
                     } else {
-                        var targets=config.Outputs.ToDictionary(o=>o.Slot,o=>request["kind"]!.GetValue<string>()=="restore" ? request["outputs"]![o.Slot.ToString()]!.AsObject() : OutputConfiguration.Validate(OutputConfiguration.Default(o,config.Endpoint)));
+                        if(request["kind"]!.GetValue<string>()=="prepare")await config.RefreshAudio(token);
+                        var targets=config.Outputs.ToDictionary(o=>o.Slot,o=>request["kind"]!.GetValue<string>()=="restore" ? request["outputs"]![o.Slot.ToString()]!.AsObject() : OutputConfiguration.Validate(OutputConfiguration.Default(o,config.EffectiveEndpoint)));
                         await manager.ApplyGroup(targets,request["expectedWorkers"] as JsonObject,()=>sent=true,token);
                         lock(sync){foreach(var pair in targets){desired[pair.Key]=(JsonObject)pair.Value.DeepClone();activeSlots.Add(pair.Key);}armed=true;SaveIntent();}
                     }

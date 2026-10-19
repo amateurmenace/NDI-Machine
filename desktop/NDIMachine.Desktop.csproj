@@ -6,10 +6,11 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>NDI Machine</AssemblyName>
     <RootNamespace>NDIMachine.Desktop</RootNamespace>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <ItemGroup><Compile Include="../shared/DesktopActivation.cs" Link="DesktopActivation.cs" /></ItemGroup>
 </Project>

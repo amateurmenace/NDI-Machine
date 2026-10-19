@@ -12,6 +12,29 @@ public sealed class Commission
     public string Root { get; }
     public string Fingerprint { get; }
     public string Endpoint { get; }
+    public bool RecoverDanteUsb { get; }
+    private sealed record AudioBinding(string Endpoint, bool Available, string Message);
+    private AudioBinding binding = new("", false, "Not resolved");
+    public string EffectiveEndpoint => binding.Endpoint;
+    public bool AudioAvailable => !RecoverDanteUsb || binding.Available;
+    public JsonObject AudioState() {
+        var value=binding;
+        return new(){["configuredEndpointId"]=Endpoint,["resolvedEndpointId"]=value.Endpoint,["available"]=value.Available,["message"]=value.Message};
+    }
+    public void ResolveAudio(JsonArray inventory) {
+        if(!RecoverDanteUsb)return;
+        try {
+            var resolved=AudioEndpointResolver.Resolve(Endpoint,inventory);
+            binding=new(resolved,true,resolved.Equals(Endpoint,StringComparison.OrdinalIgnoreCase)
+                ? "Dante USB receive 1/2 matched the saved ID"
+                : "Dante USB receive 1/2 recovered after Windows changed its device ID");
+        } catch(Exception error){binding=new(Endpoint,false,error.Message);throw;}
+    }
+    public async Task RefreshAudio(CancellationToken token) {
+        if(!RecoverDanteUsb)return;
+        try {ResolveAudio((await NativeTools.Run(this,"audio-host.exe",["--list"],token)).AsArray());}
+        catch(Exception error){binding=new(Endpoint,false,error.Message);throw;}
+    }
     public OutputAssignment[] Outputs { get; }
     public JsonObject Plan { get; }
     public Commission(string filePath, string root)
@@ -23,6 +46,10 @@ public sealed class Commission
         if (config["schemaVersion"]?.GetValue<int>() != 1) throw new InvalidDataException("Commission schema must be 1");
         var audio = config["audio"]!;
         Endpoint = audio["endpointId"]!.GetValue<string>();
+        RecoverDanteUsb=audio["endpointRecovery"]?.GetValue<string>()=="unique-dante-usb";
+        if(audio["endpointRecovery"]!=null && (!RecoverDanteUsb || !AudioEndpointResolver.IsDanteUsbReceive(audio["displayName"]?.GetValue<string>() ?? "")))
+            throw new InvalidDataException("Endpoint recovery requires the explicitly commissioned Dante USB receive device");
+        binding=new(Endpoint,!RecoverDanteUsb,RecoverDanteUsb ? "Dante USB identity not resolved yet" : "Fixed commissioned endpoint");
         if (Endpoint.Length is < 1 or > 500 || audio["policy"]?.GetValue<string>() != "fixed" ||
             audio["backend"]?.GetValue<string>() != "wasapi" || audio["channels"]?.ToJsonString() != "[1,2]" ||
             audio["calibration"]?.GetValue<string>() != "unity")

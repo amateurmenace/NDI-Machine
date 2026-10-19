@@ -85,6 +85,17 @@ public partial class MainWindow : Window
     private void SelectMode(object sender,RoutedEventArgs e) {
         if(sender is not RadioButton button)return;
         model.SetMode((string)button.Tag=="production");
+        SaveMode();
+    }
+    public void ShowFailover() {
+        model.SetMode(false);
+        SaveMode();
+        if(WindowState==WindowState.Minimized)WindowState=WindowState.Normal;
+        Show();
+        // Explicit PRIME should surface an existing window as well as a new one.
+        var topmost=Topmost;Topmost=true;Activate();Topmost=topmost;
+    }
+    private void SaveMode() {
         try{File.WriteAllText(Path.Combine(root,"config","local.desktop.json"),new JsonObject{["mode"]=model.ProductionMode?"production":"failover"}.ToJsonString());}
         catch(Exception error){model.Message("Mode selected; could not save preference: "+error.Message);}
     }
@@ -310,7 +321,7 @@ public partial class MainWindow : Window
             FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 12, Background = (System.Windows.Media.Brush)FindResource("Canvas"), Foreground = (System.Windows.Media.Brush)FindResource("Ink"), BorderThickness = new Thickness(0) };
         panel.Children.Add(text); window.Content = panel; window.ShowDialog();
     }
-    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.5.0", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+    private JsonObject DiagnosticSnapshot() => new() { ["schemaVersion"] = 1, ["applicationVersion"] = "0.6.1", ["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
         ["controlConnected"] = model.Connected, ["physicalSignalVerified"] = "Unknown", ["state"] = model.State?.DeepClone(), ["plan"] = model.Plan?.DeepClone(),
         ["events"] = new JsonArray(model.Events.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) };
     private string DiagnosticText() => DiagnosticSnapshot().ToJsonString(new JsonSerializerOptions { WriteIndented = true });

@@ -169,7 +169,16 @@ public sealed class DashboardModel : Observable
     {
         CompanionStatus = status; CompanionReason = reason; CompanionColor = ready ? "#7DE1CC" : "#F6BD75"; Changed();
     }
-    public string Readiness => $"{Outputs.Count(o => ProductionMode ? o.SoftwareHealthy : o.PlanReady(OutputModel.Text(Plan, "audioEndpointId")))} / {(Plan?["paths"] is JsonArray paths ? paths.Count : 4)}";
+    private string? EmergencyEndpoint {
+        get {
+            var configured=OutputModel.Text(Plan,"audioEndpointId");
+            if(!HasCapability("audio-endpoint-binding"))return configured;
+            var binding=State?["audioBinding"] as JsonObject;
+            return binding?["available"]?.GetValue<bool>()==true && OutputModel.Text(binding,"configuredEndpointId").Equals(configured,StringComparison.OrdinalIgnoreCase)
+                ? OutputModel.Text(binding,"resolvedEndpointId") : null;
+        }
+    }
+    public string Readiness => $"{Outputs.Count(o => ProductionMode ? o.SoftwareHealthy : o.PlanReady(EmergencyEndpoint))} / {(Plan?["paths"] is JsonArray paths ? paths.Count : 4)}";
     public string ReadyCaption => !Connected ? "READINESS UNKNOWN" : ProductionMode ? "OUTPUTS RUNNING" : "BACKUPS MATCHING PLAN";
     public string AudioCaption=>ProductionMode ? "OUTPUT AUDIO" : "DANTE USB AUDIO";
     public string AudioSummary => !Connected ? "Unknown" : ProductionMode ? $"{Outputs.Count(o=>o.AudioFresh)} active / {Outputs.Count(o=>o.Running && OutputModel.Text(o.State?["audio"] as JsonObject,"mode")=="silent")} silent" :

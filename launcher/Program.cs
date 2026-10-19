@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using NDIMachine.Launcher;
+using NDIMachine;
 
 // Independent local bootstrap: only these two fixed, sibling executables can be
 // launched. No shell, arbitrary paths, router writes or automatic media prepare.
@@ -26,6 +27,7 @@ bool Running(string path) {
 void Launch(string path,bool control) {
     var info=new ProcessStartInfo(path){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=root};
     if(control){info.ArgumentList.Add("--root");info.ArgumentList.Add(root);}
+    else info.ArgumentList.Add("--failover");
     using var process=Process.Start(info) ?? throw new IOException("Cannot launch NDI Machine");
 }
 app.Use(async(context,next)=>{
@@ -44,7 +46,11 @@ app.MapPost("/api/v1/prime",async()=>{
     if(!await gate.WaitAsync(0))return Results.Conflict(new{error="Launch already in progress"});
     try {
         if(!Running(engine) && DateTime.UtcNow-lastEngine>TimeSpan.FromSeconds(5)){lastEngine=DateTime.UtcNow;Launch(engine,true);}
-        if(!Running(gui) && DateTime.UtcNow-lastGui>TimeSpan.FromSeconds(5)){lastGui=DateTime.UtcNow;Launch(gui,false);}
+        if(Running(gui)){
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await DesktopActivation.ShowFailover(deadline.Token);
+        }
+        else if(DateTime.UtcNow-lastGui>TimeSpan.FromSeconds(5)){lastGui=DateTime.UtcNow;Launch(gui,false);}
         return Results.Json(new{schemaVersion=1,accepted=true});
     }finally{gate.Release();}
 });

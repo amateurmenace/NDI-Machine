@@ -8,6 +8,9 @@ var builder = WebApplication.CreateBuilder(args);
 var root = builder.Configuration["root"] ?? throw new ArgumentException("--root project directory required");
 var path = builder.Configuration["commission"] ?? Path.Combine(root, "config", "local.commissioning.json");
 var commission = new Commission(path, root);
+// Read-only discovery. Receivers still require explicit Apply/PRIME. If USB is
+// late at sign-in, keep the API available and resolve again on explicit PRIME.
+try { await commission.RefreshAudio(CancellationToken.None); } catch(Exception) { }
 // Deliberately loopback only. Ignore ASPNETCORE_URLS and no automatic LAN binding.
 builder.WebHost.ConfigureKestrel(options => {
     options.Listen(IPAddress.Loopback, 9860);

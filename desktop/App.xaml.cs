@@ -6,16 +6,24 @@ namespace NDIMachine.Desktop;
 public partial class App : Application
 {
     private Mutex? owner;
-    protected override void OnStartup(StartupEventArgs e)
+    private readonly CancellationTokenSource activationLifetime = new();
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         try
         {
+            var options = DesktopArguments.Parse(e.Args);
             owner=new Mutex(true,@"Local\NDIMachine.Desktop",out var first);
-            if(!first){owner.Dispose();owner=null;Shutdown();return;}
-            var root = FindRoot(e.Args);
+            if(!first){
+                owner.Dispose();owner=null;
+                if(options.Failover){using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(2));await DesktopActivation.ShowFailover(deadline.Token);}
+                Shutdown();return;
+            }
+            var root = options.Root ?? FindRoot();
             MainWindow = new MainWindow(root);
             MainWindow.Show();
+            if(options.Failover)((MainWindow)MainWindow).ShowFailover();
+            _ = DesktopActivation.Listen(() => Dispatcher.InvokeAsync(() => ((MainWindow)MainWindow).ShowFailover()).Task, activationLifetime.Token);
         }
         catch (Exception error)
         {
@@ -23,11 +31,9 @@ public partial class App : Application
             Shutdown(1);
         }
     }
-    protected override void OnExit(ExitEventArgs e) {owner?.Dispose();base.OnExit(e);}
-    private static string FindRoot(string[] args)
+    protected override void OnExit(ExitEventArgs e) {activationLifetime.Cancel();owner?.Dispose();base.OnExit(e);}
+    private static string FindRoot()
     {
-        if (args.Length == 2 && args[0] == "--root") return Path.GetFullPath(args[1]);
-        if (args.Length != 0) throw new ArgumentException("Usage: NDI Machine.exe [--root project-or-package-directory]");
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)
             if (File.Exists(Path.Combine(directory.FullName, "config", "local.commissioning.json"))) return directory.FullName;
         // An unattached copy can still monitor the localhost engine. Launching a host

@@ -10,7 +10,8 @@ export type ReadyOutput = {
   fallback: boolean; format: string; audio: {endpointId: string; channels: number[]; mode: string; ageMs: number; muted: boolean};
   health: string; emergencyConfigured?:boolean; workerInstanceId?:string; settings?:Record<string,unknown>; desiredSettings?:Record<string,unknown>
 }
-export type MediaState = {schemaVersion: number; nonce: string; instanceId: string; outputs: ReadyOutput[]; capabilities?:string[]}
+export type MediaState = {schemaVersion: number; nonce: string; instanceId: string; outputs: ReadyOutput[]; capabilities?:string[];
+  audioBinding?:{configuredEndpointId:string;resolvedEndpointId:string;available:boolean;message:string}}
 export interface Media { state(): Promise<MediaState>; prepare(plan: Plan): Promise<string>; prepareReady?(plan:Plan,initial:MediaState):Promise<MediaState>; captureUndo?(initial:MediaState):Promise<()=>Promise<void>> }
 export function needsRestore(plan:Plan,state:MediaState):boolean {
   return state.capabilities?.includes('emergency-restore')===true && plan.paths.some(path=>state.outputs.find(o=>o.slot===path.slot)?.emergencyConfigured!==true)
@@ -38,6 +39,13 @@ export function validatePlan(raw: unknown): Plan {
 function age(value: number): boolean { return Number.isFinite(value) && value >= 0 && value < 500 }
 export function readiness(plan: Plan, state: MediaState): string | undefined {
   if (state.schemaVersion !== 1 || !state.instanceId || !Array.isArray(state.outputs)) return 'Invalid media state'
+  let endpoint=plan.audioEndpointId
+  if(state.capabilities?.includes('audio-endpoint-binding')) {
+    const binding=state.audioBinding
+    if(!binding || binding.available!==true || binding.configuredEndpointId?.toLowerCase()!==endpoint.toLowerCase() || !binding.resolvedEndpointId)
+      return binding?.message || 'Commissioned Dante USB endpoint binding is unavailable'
+    endpoint=binding.resolvedEndpointId
+  }
   for (const path of plan.paths) {
     const matches = state.outputs.filter(output => output.slot === path.slot)
     const output = matches[0]
@@ -52,7 +60,7 @@ export function readiness(plan: Plan, state: MediaState): string | undefined {
       if (!audio || audio.mode !== 'silent' || !audio.muted) return `Output ${path.slot}: silent audio policy is not committed`
       continue
     }
-    if (!audio || audio.mode !== 'fixed' || audio.endpointId?.toLowerCase() !== plan.audioEndpointId.toLowerCase() ||
+    if (!audio || audio.mode !== 'fixed' || audio.endpointId?.toLowerCase() !== endpoint.toLowerCase() ||
         JSON.stringify(audio.channels) !== '[1,2]' || !age(audio.ageMs) || audio.muted)
       return `Output ${path.slot}: Dante USB receive 1/2 audio is not freshly ready`
   }

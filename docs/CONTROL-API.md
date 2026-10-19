@@ -56,3 +56,9 @@ For maintenance shutdown use the GUI Engine controls. `POST /api/v1/outputs/<slo
 Companion exposes read-only production status at `127.0.0.1:9862/api/v1/state` and explicit `POST /api/v1/return-sdi` for the GUI. State includes `outputMappings`: physical `slot`, persistent `device`, commissioned `atemInput`, `hubInput`, and actual `destinations` (null when unavailable). The GUI uses this for labels without changing source assignments. Explicit commands share the same operation lock as failover.
 
 References: [Microsoft named-pipe APIs](https://learn.microsoft.com/en-us/dotnet/api/system.io.pipes.namedpipeclientstream.connectasync?view=net-8.0), [ASP.NET Core WebSockets](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/websockets?view=aspnetcore-8.0).
+
+## Audio identity binding (0.6.1)
+
+State advertises `audio-endpoint-binding` and returns `audioBinding` with `configuredEndpointId`, `resolvedEndpointId`, `available` and `message`. The first ID remains the exact ID in the commissioned plan; the second is the actual endpoint selected by the engine. Clients must require a matching configured ID, an available binding and fresh worker audio on the resolved ID. Older engines retain exact-ID readiness checks.
+
+`audio.endpointRecovery: "unique-dante-usb"` enables the restricted product resolver described in DESKTOP.md. Resolution precedes emergency preparation and all hardware writes. Failed resolution leaves the API available, marks the binding unavailable and rejects preparation. The plan, channels, physical slot and ATEM audio destination are unchanged. Ordinary output editing and undo still use the exact captured settings.
