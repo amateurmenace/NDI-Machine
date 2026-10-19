@@ -2,11 +2,11 @@
 
 This engineering build is installed on the commissioned workstation. Source delivery excludes proprietary SDKs, binaries, private commissioning and diagnostic captures. Historical media evidence is in MEDIA-PROOF.md and CONTROL-PROOF.md. Software checks do not establish physical broadcast qualification.
 
-## Pending control hotfix — 0.5.3
+## Installed control hotfix — 0.5.3
 
 An operator failover attempt exposed a numeric-type bug in group preparation when any receiver is idle: local revision zero was Int32, while the expected-revision guard reads Int64. Preparation failed before media writes. The corrected value is Int64; a regression reproduced the original exception and now passes both all-idle and mixed-running preflight. Control/desktop checks pass **37/37**. Native and Companion code are unchanged.
 
-The control-only 0.5.3 build is staged. Automatic approval review rejected the attempted host replacement with “blocked by policy”; activation awaits the operator stopping the verified old host. `scripts/Install-Control-053.ps1` refuses a running host and installs/starts only the corrected engine. GUI and Companion remain 0.5.2. Live failover retry is not yet verified.
+The operator stopped the old host, and `scripts/Install-Control-053.ps1` installed the tested control-only 0.5.3 build into the existing package. The running AG-2 worker retained its identity and revision; slots2–4 remained idle and all eight inputs retained normal SDI status. Only the NDI Machine Companion connection was refreshed to clear the previous failed outcome. No live failover press or router/audio write was made. GUI, launcher and Companion remain 0.5.2. Live failover retry is not yet verified. Activation evidence is retained privately in `engine-hotfix-053-proof.json` and `control-053-20261018-235739/after.json`.
 
 ## Current behavior
 
